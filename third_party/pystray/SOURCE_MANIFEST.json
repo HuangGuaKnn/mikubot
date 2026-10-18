@@ -1,0 +1,27 @@
+{
+  "name": "pystray",
+  "version": "0.19.5",
+  "origin": "Unmodified installed distribution source; each original package file checked against installed wheel RECORD sha256.",
+  "upstream": "https://github.com/moses-palmer/pystray",
+  "release": "https://pypi.org/project/pystray/0.19.5/",
+  "copyright": "Copyright (C) 2016-2022 Moses Palmér",
+  "license": "LGPL-3.0-or-later (source file headers)",
+  "files": {
+    "COPYING": "1e4d0c2eb111b851de12d7b2737195b950fae3620d2a23a474ce8d46e1d2e4b6",
+    "COPYING.LGPL": "e583ee8a64cd2ae744422bf76a1295838acae3698347f3a2af07462ddfaf0d2d",
+    "UPSTREAM-METADATA.txt": "073b0620fe49a47061d336d7110779e6ca808e8294b0aa5cd9d437b1979d8fb1",
+    "pystray/__init__.py": "c8e2b76aef6862992334eca1cc88b319b70db64dc9a391ea41c55a675c1fc20d",
+    "pystray/_appindicator.py": "538439ba1f43967845690a6d50941407a9d19bee3915664a5e552fbcab755f36",
+    "pystray/_base.py": "d964e3ae1f62238cdc96411491ad8b2844690523f1ac9ef68bfa2d3376f22b7e",
+    "pystray/_darwin.py": "fdc51dfe2bbdce148dc4d111644f3b7c0a437f5ffcfb77fb5acadc36b86bea3a",
+    "pystray/_dummy.py": "61cf5fc0f443692d9e29a6368d4b320757fb4a6a0601be5f46bcb9d06ca20f0c",
+    "pystray/_gtk.py": "a38d619ad380bfd0dfe35ed4dcf946e2de2fe09264617fddca8088f2c5426060",
+    "pystray/_info.py": "c7974beafe3d59822362f2b71f18d336d4a580826936e6382f2997198de32200",
+    "pystray/_util/__init__.py": "441f5b187d0ce1a6fc1f25f26cf384835688c3763f4dfa2e1753d65737ff84c6",
+    "pystray/_util/gtk.py": "eeaba1b86131fe48a10f1ac1af8fcf29fb57fd49ab65fb1f42ac1c8e45e359b2",
+    "pystray/_util/notify_dbus.py": "7df75ffbc11ba85c372670501154f98c9a8a1c207d938009e3654553982f4835",
+    "pystray/_util/win32.py": "4a3c2d0c81040632f2fb1777644ba8214d58eec1861343a8ce2ca205366d3dff",
+    "pystray/_win32.py": "de4a968ac1cd519291fde5b13716446a8e5bd8805ab4d9e428ea2e3d66f37fb5",
+    "pystray/_xorg.py": "01d5a1e99a9611986aa91add5dce60a30adddd01210d7bbdc4741764a1b74dda"
+  }
+}

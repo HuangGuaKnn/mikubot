@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=75,<83"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mikubot"
+dynamic = ["version", "dependencies"]
+description = "Local QQ companion and administrator-authorized task assistant"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: Microsoft :: Windows",
+]
+
+[project.scripts]
+mikubot = "qunyu.__main__:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "qunyu.__version__"}
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+include = ["qunyu*"]
+
+[tool.setuptools.package-data]
+qunyu = ["static/*", "static/assets/brand/*", "resources/csp/*", "resources/csp/references/*"]

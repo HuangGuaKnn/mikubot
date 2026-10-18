@@ -1,0 +1,13 @@
+fastapi==0.143.1
+uvicorn==0.54.0
+httpx==0.28.1
+websockets==17.2
+python-multipart==0.0.32
+qq-botpy==1.2.1
+pystray==0.19.5
+pillow==12.3.0
+pypdf==6.20.1
+jsonschema==4.26.0
+pywebview==6.2.1; sys_platform == 'win32'
+pythonnet==3.2.1; sys_platform == 'win32'
+clr_loader==0.3.1; sys_platform == 'win32'
