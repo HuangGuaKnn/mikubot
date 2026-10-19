@@ -444,6 +444,7 @@ def launch_installed(target: Path | str, data_dir=None):
     arguments = [str(target / 'mikubot.exe')]
     if data_dir is not None: arguments += ['--data-dir', str(Path(data_dir).resolve())]
     return subprocess.Popen(arguments, cwd=target,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
 

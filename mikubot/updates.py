@@ -336,6 +336,7 @@ class UpdateManager:
         # exact process to exit, and then uses the existing staged installer.
         process = subprocess.Popen([str(path), '--target', str(target), '--wait-pid', str(os.getpid()),
                                     '--data-dir', str(self.data_dir)], cwd=path.parent,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         self.download.update(status='installing', message='安装器已启动，mikubot 即将退出；请在安装窗口完成更新')
         try: self._save()

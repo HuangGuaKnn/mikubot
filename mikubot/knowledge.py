@@ -627,7 +627,8 @@ class PersonaKnowledge:
             excluded = [str(value).strip().casefold() for value in persona.get('excluded_topics', []) if str(value).strip()]
             if any(value in interest.casefold() for value in excluded):
                 return {'created': 0, 'items': [], 'skipped': True, 'message': '当前兴趣属于排除主题，请调整兴趣列表。'}
-            query = f'{interest} 最新资讯 {_now():%Y年%m月}'[:300]
+            moment = _now()
+            query = f'{interest} 最新资讯 {moment.year:04d}年{moment.month:02d}月'[:300]
             rules = self.sources(persona_id)
             def reserve():
                 self._state['budget'] = {'day': day, 'searches': count + 1}

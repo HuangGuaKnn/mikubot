@@ -148,6 +148,7 @@ async def test_installer_handoff_preserves_data_and_blocks_downgrade(tmp_path,mo
     assert item.launch_installer(original['id'])['installer_pid']==888
     arguments=launched[0][0]
     assert arguments[1:]==['--target',str(target.resolve()),'--wait-pid',str(updates.os.getpid()),'--data-dir',str(item.data_dir)]
+    assert all(launched[0][1][name]==updates.subprocess.DEVNULL for name in ('stdin','stdout','stderr'))
     assert item.download['status']=='installing'
     with pytest.raises(ValueError):item.launch_installer(original['id'])
     assert len(launched)==1

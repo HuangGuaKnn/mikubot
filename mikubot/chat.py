@@ -680,7 +680,7 @@ class ChatService:
             if len(records) != 1 or not due:
                 return {'reply': '需要唯一的提醒标题或 ID，以及明确的新日期时间，例如“把喝水提醒改到明晚八点”。'}
             task = self.store.update_task(records[0]['id'], {'due_at': due[0], 'repeat': due[2], 'status': 'pending', 'delivery_status': 'pending', 'error': ''})
-            return {'reply': '已改期：' + task['title'] + '\n' + datetime.fromisoformat(due[0]).astimezone(HK).strftime('%Y-%m-%d %H:%M（UTC+8）'), 'actions': [{'tool': 'update_task', 'ok': True, 'result': task}]}
+            return {'reply': '已改期：' + task['title'] + '\n' + datetime.fromisoformat(due[0]).astimezone(HK).strftime('%Y-%m-%d %H:%M') + '（UTC+8）', 'actions': [{'tool': 'update_task', 'ok': True, 'result': task}]}
         cancel = re.match(r'^(?:取消提醒|取消待办|取消任务)[：:\s]+(.+)$', text)
         if cancel:
             require_tools()

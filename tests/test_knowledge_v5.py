@@ -1,5 +1,5 @@
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import json
 
 import pytest
@@ -58,6 +58,18 @@ def engine(store, cfg=None, provider=None, sources=None):
     if not service.status()['degraded']:
         service.configure_sources('interested', {'allowed_domains': ['news.example']})
     return service, sources
+
+
+@pytest.mark.anyio
+async def test_exploration_date_does_not_pass_chinese_to_locale_strftime(store, monkeypatch):
+    class AsciiFormatDate(datetime):
+        def __format__(self, spec):
+            spec.encode('ascii')
+            return super().__format__(spec)
+    monkeypatch.setattr('mikubot.knowledge._now', lambda: AsciiFormatDate(2026, 10, 19, tzinfo=timezone.utc))
+    service, sources = engine(store, provider=Provider())
+    await service.explore('interested')
+    assert sources.queries and sources.queries[0].endswith('2026年10月')
 
 
 @pytest.mark.anyio
