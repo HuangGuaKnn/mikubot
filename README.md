@@ -1,18 +1,18 @@
 # mikubot 0.1.1
 
-当前源码版本为 **0.1.1，安装包尚未发布**，包含此前改进和 GitHub 版本选择、校验下载与安装衔接。下述新功能需运行当前源码；GitHub 的既有安装包与源码 ZIP 尚未更新。修改与验证范围见[改进记录](docs/LOCAL_CHANGES.md)。
+当前版本为 **0.1.1**，提供Windows安装版、便携版和源码包。新增GitHub版本更新、按描述生成人格、统一机器人配置，并修复记忆与运行流程。详见[更新日志](RELEASE_NOTES.md)。
 
 本机运行的 AI 聊天机器人与任务助手。默认提供初音未来人格，支持独立聊天、QQ 接入、记忆、黑话学习、人格蒸馏和管理员电脑任务。
 
 ## 下载与选择
 
-0.1.1 尚未发布；此前的 **[0.1.0 下载页](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.0)** 仍可使用，下面的文件是既有版本，包含的功能以其发行说明为准：
+前往 **[GitHub Releases 下载0.1.1](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.1)**，展开Assets，按用途选择：
 
 | 文件 | 适合谁 | 使用方式 |
 | --- | --- | --- |
-| [mikubot-0.1.0-Windows-Setup.exe](https://github.com/iownmmiku/mikubot/releases/download/v0.1.0/mikubot-0.1.0-Windows-Setup.exe) | Windows 用户，推荐 | 双击安装，随后从快捷方式打开 |
-| [mikubot-0.1.0-Windows-x64.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.0/mikubot-0.1.0-Windows-x64.zip) | 希望解压即用 | 完整解压后双击 `mikubot.exe`，不要只取出 EXE |
-| [mikubot-0.1.0-source.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.0/mikubot-0.1.0-source.zip) | 希望运行或修改代码 | 安装 Python 3.12，按下方命令启动 |
+| [mikubot-0.1.1-Windows-Setup.exe](https://github.com/iownmmiku/mikubot/releases/download/v0.1.1/mikubot-0.1.1-Windows-Setup.exe) | Windows 用户，推荐 | 双击安装，随后从快捷方式打开 |
+| [mikubot-0.1.1-Windows-x64.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.1/mikubot-0.1.1-Windows-x64.zip) | 希望解压即用 | 完整解压后双击 `mikubot.exe`，不要只取出 EXE |
+| [mikubot-0.1.1-source.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.1/mikubot-0.1.1-source.zip) | 希望运行或修改代码 | 安装 Python 3.12，按下方命令启动 |
 
 安装版和便携版无需 Python、Node 或 Git，默认打开独立桌面窗口。它们不包含模型账号、API Key、QQ 客户端或 NapCat/SnowLuma，需要自行准备。模型调用按所选服务商规则计费。
 
@@ -63,7 +63,7 @@
 
 ## 从源码运行
 
-Windows 安装 **Python 3.11–3.13（推荐3.12）**，使用当前工作区源码；发布后也可完整解压对应版本的源码包。在包含 `requirements.txt` 的目录打开 PowerShell：
+Windows 安装 **Python 3.11–3.13（推荐3.12）**，完整解压`mikubot-0.1.1-source.zip`，或克隆本仓库。在包含 `requirements.txt` 的目录打开 PowerShell：
 
 ```powershell
 # 首次：创建 .venv、安装依赖并启动，下载依赖需要网络
@@ -101,7 +101,7 @@ Windows 默认数据在 **`%LOCALAPPDATA%\mikubot\data`**，独立于程序目�
 
 “设置与连接 → 版本与更新”可检查固定GitHub仓库、选择正式版/测试版/历史版本、查看说明并下载指定文件。下载通过大小和SHA-256校验后，Windows安装版可在本机确认“退出并启动安装”；源码和便携版下载到新目录后按指南部署。历史版本只下载，不直接覆盖降级。不会自动拉取代码或覆盖未提交改动，详见[更新指南](docs/UPDATES.md)。
 
-现有0.1.0安装包没有更新入口；0.1.1发布后需先手动安装一次。本地版本改为0.1.1不会自动创建GitHub发行版。
+0.1.0安装包没有更新入口，请先手动安装一次0.1.1；之后可在软件内检查并下载已发布版本。
 
 ## 文档与验证范围
 

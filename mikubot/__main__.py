@@ -385,6 +385,12 @@ def _run_instance(data, args, parser):
 
 
 def run():
+    # Help and diagnostics contain Chinese. Redirected Windows runners may
+    # otherwise choose cp1252 even though the terminal expects UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        if callable(getattr(stream, 'reconfigure', None)):
+            try: stream.reconfigure(encoding='utf-8', errors='backslashreplace')
+            except (OSError, ValueError): pass
     try:
         main()
     except Exception as exc:

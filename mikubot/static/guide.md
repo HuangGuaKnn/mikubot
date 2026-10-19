@@ -1,12 +1,12 @@
 # mikubot 0.1.1 使用指南
 
-本地源码已设为0.1.1，尚未发布；既有 GitHub 安装包仍为0.1.0。[本地改进记录](https://github.com/iownmmiku/mikubot/blob/main/docs/LOCAL_CHANGES.md)列出新实现与验收范围。
+当前版本为0.1.1，提供安装版、便携版和源码包。[本地改进记录](https://github.com/iownmmiku/mikubot/blob/main/docs/LOCAL_CHANGES.md)列出新实现与验收范围。
 
 mikubot 是本机运行的聊天机器人和任务助手。默认人格为初音未来，可以在管理台聊天，也可以接入 NapCat、SnowLuma 或 QQ 官方机器人。电脑任务由管理员发起；普通聊天用户不会因能聊天而获得管理员权限。
 
 第一次使用的最短路径：下载并打开软件 → 设置登录密码 → 快速入门中添加供应商、获取并选择聊天模型 → 打开“聊天”发消息。默认名称可以直接沿用，QQ 和电脑能力可以稍后开启。
 
-此前已发布的0.1.0可在 [GitHub Releases](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.0) 的 Assets 中下载：`mikubot-0.1.0-Windows-Setup.exe` 是推荐安装版；`mikubot-0.1.0-Windows-x64.zip` 是完整解压后运行的便携版；`mikubot-0.1.0-source.zip` 需要 Python 3.12。安装版与便携版无需 Python 或 Node，也不包含模型密钥、QQ 客户端和连接器。
+在 [GitHub Releases](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.1) 的 Assets 中下载：`mikubot-0.1.1-Windows-Setup.exe` 是推荐安装版；`mikubot-0.1.1-Windows-x64.zip` 是完整解压后运行的便携版；`mikubot-0.1.1-source.zip` 需要 Python 3.11–3.13（推荐3.12）。安装版与便携版无需 Python 或 Node，也不包含模型密钥、QQ 客户端和连接器。
 
 ## 0. 首次登录、密码与数据目录
 
@@ -249,6 +249,6 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1 -Stop
 
 Windows安装版可在运行电脑上确认“退出并启动安装”，安装器等待旧进程退出，更新后继续使用原数据目录。先完成或停止后台任务，并保存完整数据副本。远程页面不允许启动安装。
 
-源码和便携版请将下载包解压到新目录，按原部署方式继续使用数据目录；源码不会自动git pull或覆盖未提交改动。历史版只下载，不直接覆盖降级。旧0.1.0安装包没有更新入口，0.1.1发布后需先手动安装一次。当前GitHub未发布的版本不会显示为可下载。
+源码和便携版请将下载包解压到新目录，按原部署方式继续使用数据目录；源码不会自动git pull或覆盖未提交改动。历史版只下载，不直接覆盖降级。旧0.1.0安装包没有更新入口，需先手动安装一次0.1.1。当前GitHub未发布的版本不会显示为可下载。
 
 详细步骤和限制见[更新指南](https://github.com/iownmmiku/mikubot/blob/main/docs/UPDATES.md)。

@@ -1,6 +1,6 @@
 # mikubot 源码部署指南
 
-当前工作区是尚未发布的0.1.1源码。GitHub现有源码ZIP与安装包尚未更新；本指南中的新功能需使用当前源码。完整的隔离、HTTPS、Linux/Docker步骤与验收限制见[部署与安全说明](DEPLOYMENT_AND_SAFETY.md)。
+当前版本为0.1.1。安装包、便携包及源码包见[GitHub Releases](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.1)。完整隔离、HTTPS、Linux/Docker步骤与验收范围见[部署与安全说明](DEPLOYMENT_AND_SAFETY.md)。
 
 ## Windows：一条命令准备并启动
 
