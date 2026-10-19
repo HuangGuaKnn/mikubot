@@ -235,7 +235,7 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1 -Stop
 
 只准备环境使用 `-SetupOnly`；依赖缺失时使用 `-Reinstall -SetupOnly`。停止可用 `powershell -ExecutionPolicy Bypass -File .\scripts\setup-source.ps1 -Stop`，也可从管理台或托盘退出。
 
-完整迁移、手动部署和实验性 Linux 路径见[源码部署指南](SOURCE_DEPLOY.md)。Linux 尚未进行真实系统验收；默认只绑定回环地址，远程访问需要密码与受保护网络。源码 ZIP 不包含用户数据、已登录 QQ 或任何可用密钥。
+完整迁移、手动部署和实验性 Linux 路径见[源码部署指南](SOURCE_DEPLOY.md)。Linux无头核心已通过GitHub CI，真实QQ与长期部署仍需在目标环境验收；默认只绑定回环地址，远程访问需要密码与受保护网络。源码 ZIP 不包含用户数据、已登录 QQ 或任何可用密钥。
 
 ## 11. 调度与外部环境验收
 

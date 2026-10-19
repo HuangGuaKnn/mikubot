@@ -1,6 +1,6 @@
 # 本地改进：部署、隔离与验收
 
-本文描述**尚未发布的本地源码**，版本仍为0.1.0；GitHub现有安装包和源码ZIP没有更新。正式桌面目标为Windows。Linux/Docker入口与持续集成配置已提供，但本机没有对应运行环境，不能宣称完成这些实机验收。
+本文描述0.1.1。正式桌面目标为Windows；Linux核心的Python3.11–3.13回归、Docker镜像构建和隔离探针已在[GitHub Actions](https://github.com/iownmmiku/mikubot/actions/runs/39226282587)通过。本机Windows家庭版仍未运行Docker，真实QQ、长期服务器部署与公网证书需按目标环境验收。
 
 ## Python 与包入口
 
@@ -100,4 +100,4 @@ Docker脚本真实检查宿主文件不可见、根目录只读、网络不可�
 
 真实QQ验收脚本不改配置、不代发消息，由用户在观察窗口发送测试消息。报告只留诊断代码与计数，登录密码交互输入，Cookie不落盘。加 `--test-model` 才允许一次真实模型调用，可能计费。未观察到平台发送回执标记inconclusive；平台回执不等于用户已阅读。
 
-真实本地TCP回归覆盖429、坏格式、流中断、超时、错误Token和WebSocket断开重连，仍非真实QQ账号或付费模型验收。`.github/workflows/ci.yml` 提供Windows/Linux、Python3.11–3.13和Docker验收配置；尚未推送，不能宣称GitHub Actions已经运行。
+真实本地TCP回归覆盖429、坏格式、流中断、超时、错误Token和WebSocket断开重连，仍非真实QQ账号或付费模型验收。`.github/workflows/ci.yml` 已在上述代码提交上完成Windows/Linux、Python3.11–3.13和Docker验收；对应结果不扩大为真实QQ或全部部署环境均通过。

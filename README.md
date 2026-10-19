@@ -110,4 +110,4 @@ Windows 默认数据在 **`%LOCALAPPDATA%\mikubot\data`**，独立于程序目�
 - [测试报告](TEST_REPORT.md)：实际检查与限制。
 - [发布说明](RELEASE_NOTES.md)：本次发行内容。
 
-正式桌面目标为 Windows。QQ 使用模拟连接器与本地消息链路回归，仍需在你的账号与连接器环境验收；不把模拟通过视为真实 QQ 登录或模型质量验证。Linux、Docker、WSL 尚未完成真实环境验收。mikubot 未附赠付费模型服务。
+正式桌面目标为 Windows。QQ 使用模拟连接器与本地消息链路回归，仍需在你的账号与连接器环境验收；不把模拟通过视为真实 QQ 登录或模型质量验证。Linux无头核心与Docker隔离通过GitHub CI；真实QQ和长期部署仍需在目标环境验收，未验证macOS桌面或WSL。mikubot 未附赠付费模型服务。
