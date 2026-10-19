@@ -6,7 +6,7 @@ import zipfile
 
 import pytest
 
-from qunyu import installer
+from mikubot import installer
 
 real_shortcuts = installer.create_shortcuts
 real_running = installer.is_instance_running
@@ -14,7 +14,7 @@ real_guard = installer._acquire_application_guard
 
 
 def test_installer_checks_independent_and_legacy_data_locations(tmp_path, monkeypatch):
-    from qunyu import data_paths
+    from mikubot import data_paths
     personal = tmp_path / 'personal-data'
     monkeypatch.setattr(data_paths, 'default_data_dir', lambda: personal)
     examined = []
@@ -307,11 +307,18 @@ def test_shortcuts_encode_user_path_as_data_and_have_no_auth_argument(tmp_path, 
     assert options['creationflags'] == installer.subprocess.CREATE_NO_WINDOW
     script = base64.b64decode(args[-1]).decode('utf-16le')
     assert str(target) not in script
-    assert "$link.Arguments = ''" in script
+    assert "$link.Arguments = $c.arguments" in script
     assert "--stop --no-browser" in script
     assert 'token' not in script
     encoded = script.split("FromBase64String('")[1].split("')")[0]
-    assert json.loads(base64.b64decode(encoded))['target'] == str(target)
+    record = json.loads(base64.b64decode(encoded))
+    assert record['target'] == str(target) and record['arguments'] == ''
+    personal = tmp_path / "custom '$() `data"
+    real_shortcuts(target, data_dir=personal)
+    custom_script = base64.b64decode(calls[1][0][-1]).decode('utf-16le')
+    encoded = custom_script.split("FromBase64String('")[1].split("')")[0]
+    assert json.loads(base64.b64decode(encoded))['arguments'] == installer.subprocess.list2cmdline(['--data-dir',str(personal.resolve())])
+    assert str(personal) not in custom_script and "'--stop --no-browser ' + $c.arguments" in custom_script
 
 
 def test_live_windows_mutex_blocks_running_and_guard_then_releases(tmp_path):

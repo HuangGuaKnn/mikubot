@@ -9,12 +9,12 @@ import httpx
 import pytest
 
 from qunyu.db import Store
-from qunyu.onebot import OneBotBridge
-from qunyu.official import OfficialBridge
-from qunyu.output import OutputLimitError, split_output
-from qunyu.provider import Provider, ProviderError
-from qunyu.settings import DEFAULTS
-from qunyu.social import SocialEngine
+from mikubot.onebot import OneBotBridge
+from mikubot.official import OfficialBridge
+from mikubot.output import OutputLimitError, split_output
+from mikubot.provider import Provider, ProviderError
+from mikubot.settings import DEFAULTS
+from mikubot.social import SocialEngine
 
 
 @pytest.fixture
@@ -146,7 +146,7 @@ async def test_planner_sees_bounded_knowledge_and_rechecks_its_dependencies(setu
 
 @pytest.mark.anyio
 async def test_expired_queued_planner_is_not_dispatched_and_direct_user_gets_feedback(setup, monkeypatch):
-    import qunyu.social as social_module
+    import mikubot.social as social_module
     store, _, _, social = setup
     scope = store.upsert_scope({'id': 'qq:group:202', 'planner_max_age_ms': 1000})
     clock = [100.0]

@@ -20,7 +20,7 @@ def main():
     parser.add_argument('--work-dir', required=True, type=Path)
     parser.add_argument('--port', type=int, default=18767)
     parser.add_argument('--mcp-fixture-url', default='')
-    parser.add_argument('--version', '--expect-version', '--expect', dest='version', default='0.1.0')
+    parser.add_argument('--version', '--expect-version', '--expect', dest='version', default='0.1.1')
     args = parser.parse_args()
     version = effective_contract_version(args.version)
     root = args.work_dir.resolve()
@@ -47,12 +47,12 @@ def main():
     assert record()['version'] == args.version
     for name, digest in record()['files'].items():
         assert hashlib.sha256((target / name).read_bytes()).hexdigest() == digest, name
-    assert (target / '_internal/qunyu/static/quick-start.js').is_file()
+    assert (target / '_internal/mikubot/static/quick-start.js').is_file()
     if version >= (0, 8):
         for name in ('experience.js', 'experience.css', 'guide.md'):
-            assert (target / '_internal/qunyu/static' / name).is_file(), name
-        assert (target / '_internal/qunyu/resources/csp/SKILL.md').is_file()
-        assert (target / '_internal/qunyu/resources/csp/references/persona-template.md').is_file()
+            assert (target / '_internal/mikubot/static' / name).is_file(), name
+        assert (target / '_internal/mikubot/resources/csp/SKILL.md').is_file()
+        assert (target / '_internal/mikubot/resources/csp/references/persona-template.md').is_file()
     assert not (target / 'data').exists()
     smoke = [sys.executable, str(Path(__file__).with_name('smoke_portable.py')),
              str(target / 'mikubot.exe'), '--data-dir', str(target / 'data'),

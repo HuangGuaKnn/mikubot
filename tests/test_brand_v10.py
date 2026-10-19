@@ -6,17 +6,17 @@ from xml.etree import ElementTree
 
 from PIL import Image
 
-from qunyu.brand import asset_path, tray_image
-from qunyu import __version__
+from mikubot.brand import asset_path, tray_image
+from mikubot import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = ROOT / 'qunyu' / 'static' / 'assets' / 'brand'
+ASSETS = ROOT / 'mikubot' / 'static' / 'assets' / 'brand'
 SIZES = {16, 20, 24, 32, 48, 64, 128, 256}
 
 
 def test_release_asset_urls_refresh_cached_older_interfaces():
     import re
-    html = (ROOT / 'qunyu' / 'static' / 'index.html').read_text('utf-8')
+    html = (ROOT / 'mikubot' / 'static' / 'index.html').read_text('utf-8')
     urls = re.findall(r'(?:src|href)="(/static/[^\"]+)"', html)
     assert urls
     assert all(url.endswith('?v=' + __version__) for url in urls)
@@ -64,9 +64,9 @@ def test_source_and_wheel_configuration_include_nested_icons():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     selected = {path.relative_to(ROOT).as_posix() for path in module.source_files(ROOT)}
-    assert 'qunyu/static/assets/brand/mikubot.ico' in selected
-    assert 'qunyu/static/assets/brand/app.svg' in selected
-    assert 'qunyu/static/assets/brand/tray-16.png' in selected
+    assert 'mikubot/static/assets/brand/mikubot.ico' in selected
+    assert 'mikubot/static/assets/brand/app.svg' in selected
+    assert 'mikubot/static/assets/brand/tray-16.png' in selected
     import tomllib
     config = tomllib.loads((ROOT / 'pyproject.toml').read_text('utf-8'))
-    assert 'static/assets/brand/*' in config['tool']['setuptools']['package-data']['qunyu']
+    assert 'static/assets/brand/*' in config['tool']['setuptools']['package-data']['mikubot']

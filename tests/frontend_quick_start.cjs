@@ -29,7 +29,7 @@ const sandbox = {
   bootstrap:async () => {},navigate:async page => calls.push(["navigate",page]),closeModal:() => {modal.open=false;},
 };
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(__dirname,"../qunyu/static/quick-start.js"),"utf8"),sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname,"../mikubot/static/quick-start.js"),"utf8"),sandbox);
 const quick = sandbox.window.MikubotQuickStart;
 const plain = value => JSON.parse(JSON.stringify(value));
 
@@ -106,7 +106,7 @@ async function main() {
   assert.equal(quick.recommendations({model:{configured:true},qq:{enabled:true,allowed_groups:1,status:{connected:true}}}).length,0);
   assert.match(quick.diagnosticsPanel({checks:[],model:{configured:true},qq:{enabled:true,allowed_groups:1,status:{connected:true}}}),/模型是否可用需单独测试/);
 
-  const app = fs.readFileSync(path.join(__dirname,"../qunyu/static/app.js"),"utf8");
+  const app = fs.readFileSync(path.join(__dirname,"../mikubot/static/app.js"),"utf8");
   assert.match(app,/function button\([^\n]+<button type="button"/);
   console.log("PASS: quick setup preserves settings, skips without writes, uses selected QQ adapter, copies no credentials, and reports local facts.");
 }

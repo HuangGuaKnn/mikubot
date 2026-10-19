@@ -7,10 +7,10 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from qunyu.api import create_app
+from mikubot.api import create_app
 from qunyu.db import Store
-from qunyu.provider import Provider, ProviderError
-from qunyu.settings import Settings, resolve_model
+from mikubot.provider import Provider, ProviderError
+from mikubot.settings import Settings, resolve_model
 
 
 def pool():
@@ -104,7 +104,7 @@ def test_embedding_route_uses_own_model_secret_price_and_cache_identity(tmp_path
     assert json.loads(seen[0].content)['model'] == 'embed-v1'
     assert seen[0].headers['authorization'] == 'Bearer embed-test-key'
     assert store.list_usage()[0]['cost'] == pytest.approx(.0002)
-    from qunyu.memory import MemoryEngine
+    from mikubot.memory import MemoryEngine
     memory = MemoryEngine(store, settings)
     old_signature = memory._signature(settings.get(), 2)
     items = settings.public()['providers']
@@ -162,7 +162,7 @@ def _unsolicited_task_response():
 
 
 def test_text_only_fallback_cannot_execute_unsolicited_tools(tmp_path, monkeypatch):
-    from qunyu.chat import ChatService
+    from mikubot.chat import ChatService
 
     seen = []
     def handler(request):
@@ -191,7 +191,7 @@ def test_text_only_fallback_cannot_execute_unsolicited_tools(tmp_path, monkeypat
 
 
 def test_disabling_model_tools_during_response_prevents_execution(tmp_path, monkeypatch):
-    from qunyu.chat import ChatService
+    from mikubot.chat import ChatService
 
     seen = []
     async def handler(request):
@@ -221,7 +221,7 @@ def test_disabling_model_tools_during_response_prevents_execution(tmp_path, monk
 
 
 def test_removing_actual_provider_during_response_prevents_execution(tmp_path, monkeypatch):
-    from qunyu.chat import ChatService
+    from mikubot.chat import ChatService
 
     async def handler(request):
         assert 'tools' in json.loads(request.content)

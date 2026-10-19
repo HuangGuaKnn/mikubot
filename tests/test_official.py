@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from qunyu.db import Store
-from qunyu.official import OfficialBridge
+from mikubot.official import OfficialBridge
 
 
 @pytest.fixture

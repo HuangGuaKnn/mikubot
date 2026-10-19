@@ -7,9 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from auth_helpers import password_login
-from qunyu.api import create_app
-from qunyu.computer import TOOLS
-from qunyu.provider import ProviderError
+from mikubot.api import create_app
+from mikubot.computer import TOOLS
+from mikubot.provider import ProviderError
 
 
 @pytest.fixture
@@ -168,7 +168,7 @@ async def test_inflight_response_is_rejected_when_source_or_selected_model_chang
 
 def test_source_disabled_during_automatic_computer_response_never_writes_file(selection, monkeypatch):
     client, app, source_id, _, _, workspace = selection
-    app.state.settings.update({'computer': {'enabled': True, 'workspace': str(workspace)}})
+    app.state.settings.update({'computer': {'enabled': True, 'runtime': 'local', 'workspace': str(workspace)}})
     dispatched = []
     def handler(request):
         dispatched.append(True)

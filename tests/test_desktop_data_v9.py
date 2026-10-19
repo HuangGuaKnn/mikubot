@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from qunyu import data_paths, startup
-from qunyu.desktop import DesktopShell, external_link, local_origin, navigation_allowed
+from mikubot import data_paths, startup
+from mikubot.desktop import DesktopShell, external_link, local_origin, navigation_allowed
 
 
 def test_default_data_separate_from_application(tmp_path):
@@ -202,7 +202,7 @@ def test_desktop_navigations_are_blocked_before_load(tmp_path, monkeypatch):
 
 
 def test_lan_listener_preserves_local_desktop_endpoint():
-    from qunyu.__main__ import _bind_listeners
+    from mikubot.__main__ import _bind_listeners
     probe = socket.socket()
     probe.bind(('127.0.0.1', 0))
     port = probe.getsockname()[1]

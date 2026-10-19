@@ -14,7 +14,7 @@ $taskPython = Join-Path $taskRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $taskPython)) {
     throw '尚未准备源码环境。请先运行 powershell -ExecutionPolicy Bypass -File .\scripts\setup-source.ps1 -SetupOnly；普通用户也可以使用安装版。'
 }
-$taskLaunchArgs = @('-m', 'qunyu')
+$taskLaunchArgs = @('-m', 'mikubot')
 if ($NoBrowser -and $Browser) { throw '-NoBrowser 和 -Browser 不能同时使用。' }
 if ($Port) { $taskLaunchArgs += @('--port', [string]$Port) }
 if ($BindHost) { $taskLaunchArgs += @('--host', $BindHost) }

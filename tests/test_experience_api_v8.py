@@ -13,10 +13,10 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from qunyu.api import create_app
-from qunyu.mcp_client import schema_hash
-from qunyu.provider import ProviderError
-from qunyu.runs import RunManager
+from mikubot.api import create_app
+from mikubot.mcp_client import schema_hash
+from mikubot.provider import ProviderError
+from mikubot.runs import RunManager
 from auth_helpers import password_login
 
 
@@ -212,7 +212,7 @@ def test_computer_disabled_and_untrusted_platform_identity_cannot_start_job(expe
     client, app = experience
     assert client.post("/api/computer/jobs", json={"text": "生成一个测试文件"}).status_code == 403
     assert client.post("/api/chat", json={"text": "测试", "mode": "computer"}).status_code == 403
-    require_ok(client.put("/api/settings", json={"computer": {"enabled": True}}))
+    require_ok(client.put("/api/settings", json={"computer": {"enabled": True, 'runtime': 'local'}}))
     ordinary = app.state.access.identity("onebot", "123", "9000")
     for metadata in ({"trusted_identity": ordinary, "is_admin": True, "is_owner": True},
                      {"trusted_identity": {"platform": "local", "account_id": "mikubot", "proof": "forged"}}):
@@ -225,7 +225,7 @@ def test_computer_disabled_and_untrusted_platform_identity_cannot_start_job(expe
 def test_computer_api_approval_resumes_once_and_returns_file_and_sse(experience, monkeypatch, tmp_path):
     client, app = experience
     workspace = tmp_path / "workspace"
-    require_ok(client.put("/api/settings", json={"computer": {"enabled": True, "workspace": str(workspace), "approval_mode": "per_action"}}))
+    require_ok(client.put("/api/settings", json={"computer": {"enabled": True, 'runtime': 'local', "workspace": str(workspace), "approval_mode": "per_action"}}))
     calls = []
     async def complete(messages, **kwargs):
         calls.append(messages)
@@ -263,7 +263,7 @@ def test_computer_api_approval_resumes_once_and_returns_file_and_sse(experience,
 def test_waiting_computer_job_cancellation_never_writes(experience, monkeypatch, tmp_path):
     client, app = experience
     workspace = tmp_path / "workspace"
-    require_ok(client.put("/api/settings", json={"computer": {"enabled": True, "workspace": str(workspace), "approval_mode": "per_action"}}))
+    require_ok(client.put("/api/settings", json={"computer": {"enabled": True, 'runtime': 'local', "workspace": str(workspace), "approval_mode": "per_action"}}))
     async def complete(messages, **kwargs):
         return {"tool_calls": [{"id": "write-cancelled", "function": {
             "name": "write_file", "arguments": json.dumps({"path": "cancelled.txt", "content": "must not write"})}}]}
@@ -337,7 +337,7 @@ def test_character_distillation_returns_persona_and_downloadable_skill(experienc
 
 def test_incomplete_distillation_cannot_apply_trial_or_download(experience, monkeypatch):
     client, app = experience
-    async def generate(payload, progress, cancel_check):
+    async def generate(payload, progress, cancel_check, **kwargs):
         progress(stage="fixture_wait", message="等待测试停止")
         while True:
             cancel_check()
@@ -522,7 +522,7 @@ def test_backup_restores_job_results_as_readonly_without_host_file_capabilities(
         assert kwargs["before_send"]()
         return {"content": "恢复后新任务正常完成"}
     monkeypatch.setattr(app.state.provider, "complete", complete)
-    require_ok(client.put("/api/settings", json={"paused": False, "computer": {"enabled": True}}))
+    require_ok(client.put("/api/settings", json={"paused": False, "computer": {"enabled": True, 'runtime': 'local'}}))
     fresh = require_ok(client.post("/api/computer/jobs", json={"text": "恢复后检查新任务权限"}))
     assert wait_job(client, fresh["id"])["result"]["reply"] == "恢复后新任务正常完成"
 
@@ -574,7 +574,7 @@ def test_api_usage_keeps_unknown_price_distinct_from_real_token_usage(experience
 
 def test_computer_close_waits_for_cancelled_thread_cleanup(experience, monkeypatch):
     client, app = experience
-    require_ok(client.put("/api/settings", json={"computer": {"enabled": True, "approval_mode": "per_action"}}))
+    require_ok(client.put("/api/settings", json={"computer": {"enabled": True, 'runtime': 'local', "approval_mode": "per_action"}}))
     entered, release, cleaned = threading.Event(), threading.Event(), threading.Event()
     async def complete(messages, **kwargs):
         return {"tool_calls": [{"id": "shell-fixture", "function": {"name": "execute_shell",
@@ -608,7 +608,7 @@ def test_qq_approval_code_is_bound_to_one_step_and_originating_admin(experience,
         "allowed_users": ["101", "303"]}, "access": {"administrators": [
         {"platform": "onebot", "account_id": "101", "instance_id": "9000"},
         {"platform": "onebot", "account_id": "303", "instance_id": "9000"}]},
-        "computer": {"enabled": True, "workspace": str(tmp_path / "qq-workspace"), "approval_mode": "per_action"}})
+        "computer": {"enabled": True, 'runtime': 'local', "workspace": str(tmp_path / "qq-workspace"), "approval_mode": "per_action"}})
     sent, calls = [], []
     async def send(scope, text):
         sent.append((scope, text))
@@ -693,7 +693,7 @@ def test_successful_mcp_approval_creates_summary_from_actual_receipt_once(experi
 def test_computer_attachment_removal_revokes_waiting_action(experience, monkeypatch, tmp_path):
     client, app = experience
     workspace = tmp_path / "workspace"
-    require_ok(client.put("/api/settings", json={"computer": {"enabled": True, "workspace": str(workspace), "approval_mode": "per_action"}}))
+    require_ok(client.put("/api/settings", json={"computer": {"enabled": True, 'runtime': 'local', "workspace": str(workspace), "approval_mode": "per_action"}}))
     ref = require_ok(client.post("/api/chat/attachments", data={"purpose": "context"},
         files={"file": ("temporary.txt", b"temporary input for this task", "text/plain")}))
     async def complete(messages, **kwargs):

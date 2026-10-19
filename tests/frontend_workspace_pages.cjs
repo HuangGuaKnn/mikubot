@@ -7,6 +7,7 @@ const catalog={providers:[{id:"p1",name:'Provider <script>bad</script>',base_url
 let responder=async(url,options)=>{
   if(url==="/api/model-providers" && options?.method==="POST")return{id:"p2"};
   if(url==="/api/model-providers")return catalog;
+  if(url==="/api/model/test")return{ok:true};
   if(url.endsWith("/discover"))return{models:['chat-a','other<script>x</script>']};
   if(url.startsWith("/api/logs?")){nextLog++;return{lines:[{id:String(nextLog),time:"10:00:00",level:"ERROR",message:'<script>secret-key-placeholder</script>'}],cursor:String(nextLog)};}
   if(url==="/api/model-catalog/models")return{models:[{id:"m-new",provider_id:options.body.provider_id,model:options.body.models[0],enabled:true}],added:[{id:"m-new"}]};
@@ -21,9 +22,13 @@ const sandbox={window:{},state,URLSearchParams,AbortController,document:{hidden:
   openModal:(...args)=>{modal=args;state.modalKind=args[3];state.modalRecord=args[4];},closeModal:()=>{modal=null;},confirmAction:async(...args)=>{modal=args;},
   bootstrap:async()=>{},navigate:async page=>state.page=page,renderPage:async()=>{},toast:()=>{},scope:()=>state.scopes[0],navigator:{clipboard:{writeText:async text=>copied=text}},
 };
-vm.createContext(sandbox);vm.runInContext(fs.readFileSync(path.join(__dirname,"../qunyu/static/workspace-pages.js"),"utf8"),sandbox);const ui=sandbox.window.MikubotPages;
+vm.createContext(sandbox);vm.runInContext(fs.readFileSync(path.join(__dirname,"../mikubot/static/workspace-pages.js"),"utf8"),sandbox);const ui=sandbox.window.MikubotPages;
 const plain=value=>JSON.parse(JSON.stringify(value));
 async function main(){
+  assert.equal(ui.recommendChatModel(['text-embedding-3-small','gpt-chat-mini','gpt-reasoning-preview']),'gpt-chat-mini');
+  assert.equal(ui.recommendChatModel(['bge-large','reranker','whisper','tts-1']), '');
+  assert.equal(ui.recommendChatModel(['model-a','model-b'],'model-b'),'model-b','an explicit valid choice is preserved');
+  assert.equal(ui.recommendChatModel(['deepseek-reasoner','deepseek-chat'],'deepseek-chat'),'deepseek-chat');
   const html=await ui.renderModels();assert.match(html,/模型供应商/);assert.match(html,/chat-a/);assert.match(html,/&lt;script&gt;bad/);assert.ok(!html.includes("<script>"));
   assert.match(await ui.chatModelControl(),/继承全局聊天模型/);
   await ui.handleChange({id:"chat-model-id",value:"m1"});assert.equal(calls.at(-1)[0],"/api/scopes/web%3Atest");assert.deepEqual(plain(calls.at(-1)[1].body),{model_id:"m1"});
@@ -47,7 +52,7 @@ async function main(){
   assert.match(ui.qqIngress({message_events_received:1,last_message_result:{code:"sent",stage:"sent"}}),/平台已确认送达/);
 
   let completed=false;await ui.startQuickModel(async()=>{completed=true;});
-  assert.equal(modal[0],"连接聊天模型");assert.equal(modal[5],"保存并用于聊天 →");
+  assert.equal(modal[0],"连接聊天模型");assert.equal(modal[5],"测试并用于聊天 →");
   const quickForm={values:{id:"",name:"New Provider",base_url:"https://new.example/v1",api_key:"fixture-new-secret",enabled:"true"},checked:[],closest(){return this;}};
   const beforeMissing=calls.length;await assert.rejects(ui.handleSubmit("model-source",quickForm),/请选择一个聊天模型/);assert.equal(calls.length,beforeMissing,"a missing model is reported before any source is saved");
   await ui.handleAction("fetch-source-models",{dataset:{},closest:()=>quickForm});
@@ -61,8 +66,36 @@ async function main(){
   const savedCalls=calls.slice(beforeSave);
   assert.equal(savedCalls[0][0],"/api/model-providers");assert.equal(savedCalls[0][1].body.enabled,true);
   assert.deepEqual(plain(savedCalls[1][1].body),{provider_id:"p2",models:["manual-chat"]},"manual name is the explicit fallback choice");
-  assert.equal(savedCalls[2][0],"/api/model-catalog/routing");assert.deepEqual(plain(savedCalls[2][1].body),{chat:"m-new"},"quick setup preserves memory and other task routes");
+  assert.equal(savedCalls[2][0],"/api/model/test");assert.deepEqual(plain(savedCalls[2][1].body),{provider_id:"m-new"});
+  assert.equal(savedCalls[3][0],"/api/model-catalog/routing");assert.deepEqual(plain(savedCalls[3][1].body),{chat:"m-new"},"quick setup binds only after a successful model test and preserves other routes");
   assert.equal(completed,true,"saving a model returns to the next quick-start step");
+
+  await ui.startQuickModel();
+  const manualNode={value:""};nodes.set('[name="manual_model"]',manualNode);
+  const recommendedForm={dataset:{},values:{id:"",name:"DeepSeek",base_url:"https://api.deepseek.com/v1",api_key:"fixture-key"},checked:[]};
+  await ui.handleAction("source-preset",{dataset:{provider:"deepseek"},closest:()=>recommendedForm});
+  assert.equal(manualNode.value,'deepseek-chat','a provider hint can be tested even when its model directory is unavailable');
+  const originalResponder=responder;
+  responder=async(url,options)=>url.endsWith('/discover') ? {models:['text-embedding-3-small','deepseek-reasoner','deepseek-chat']} : originalResponder(url,options);
+  await ui.handleAction("fetch-source-models",{dataset:{},closest:()=>recommendedForm});
+  assert.match(discovery.innerHTML,/value="deepseek-chat" checked/);
+  assert.match(discovery.innerHTML,/已推荐 deepseek-chat/);
+  assert.equal(manualNode.value,'','a directory-confirmed recommendation replaces the unverified preset hint');
+  recommendedForm.values.quick_chat_model='deepseek-reasoner';
+  await ui.handleAction("fetch-source-models",{dataset:{},closest:()=>recommendedForm});
+  assert.match(discovery.innerHTML,/value="deepseek-reasoner" checked/,'refresh preserves a model deliberately chosen by the user');
+  let finishStale;
+  responder=async()=>new Promise(resolve=>{finishStale=resolve;});
+  const fetching=ui.handleAction("fetch-source-models",{dataset:{},closest:()=>recommendedForm});
+  ui.handleInput({name:'api_key',value:'new-fixture-key',closest:()=>recommendedForm});
+  finishStale({models:['stale-chat']});await fetching;
+  assert.ok(!discovery.innerHTML.includes('stale-chat'),'old credentials cannot produce a visible recommendation after the draft changes');
+  responder=async(url,options)=>url==='/api/model/test' ? {ok:false} : originalResponder(url,options);
+  recommendedForm.values.quick_chat_model='deepseek-chat';
+  const failedStart=calls.length;
+  await assert.rejects(ui.handleSubmit('model-source',recommendedForm),/测试未通过/);
+  assert.ok(!calls.slice(failedStart).some(([url])=>url==='/api/model-catalog/routing'),'failed validation keeps the previous default');
+  responder=originalResponder;
 
   ui.close();state.page="logs";const feed={innerHTML:"",scrollTop:0,scrollHeight:20};nodes.set("#runtime-log-feed",feed);nodes.set("#runtime-log-status",{textContent:""});
   const logs=await ui.renderLogs();assert.match(logs,/暂停更新/);assert.match(logs,/api\/logs\/export/);assert.match(logs,/&lt;script&gt;/);assert.ok(!logs.includes("<script>"));

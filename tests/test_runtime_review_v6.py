@@ -5,11 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from qunyu.db import Store
-from qunyu.chat import ChatService
-from qunyu.evaluation import replay
-from qunyu.onebot import OneBotBridge
-from qunyu.settings import DEFAULTS
-from qunyu.tool_actions import ToolActions
+from mikubot.chat import ChatService
+from mikubot.evaluation import replay
+from mikubot.onebot import OneBotBridge
+from mikubot.settings import DEFAULTS
+from mikubot.tool_actions import ToolActions
 from unittest.mock import AsyncMock
 
 

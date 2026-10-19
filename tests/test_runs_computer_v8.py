@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from qunyu.computer import ComputerService
-from qunyu.computer_worker import execute as execute_worker
-from qunyu.runs import RunManager
+from mikubot.computer import ComputerService
+from mikubot.computer_worker import execute as execute_worker
+from mikubot.runs import RunManager
 
 
 @pytest.fixture

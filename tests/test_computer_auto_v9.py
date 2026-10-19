@@ -12,12 +12,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from auth_helpers import password_login
-from qunyu.access import AccessManager
-from qunyu.api import create_app
-from qunyu.computer import ComputerService
+from mikubot.access import AccessManager
+from mikubot.api import create_app
+from mikubot.computer import ComputerService
 from qunyu.db import Store
-from qunyu.runs import RunContext, RunManager, TERMINAL
-from qunyu.settings import Settings
+from mikubot.runs import RunContext, RunManager, TERMINAL
+from mikubot.settings import Settings
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def anyio_backend():
 @pytest.fixture
 def automatic(tmp_path):
     settings = Settings(tmp_path)
-    settings.update({'computer': {'enabled': True, 'workspace': str(tmp_path / 'workspace'),
+    settings.update({'computer': {'enabled': True, 'runtime': 'local', 'workspace': str(tmp_path / 'workspace'),
                                   'max_steps': 5, 'timeout_seconds': 5},
                      'access': {'administrators': [{'platform': 'onebot', 'account_id': '101', 'instance_id': '9000'}]}})
     store = Store(tmp_path)
@@ -217,7 +217,7 @@ def test_regular_chat_explicit_computer_request_starts_an_automatic_background_t
     with TestClient(app) as client:
         password_login(client, app)
         workspace = tmp_path / 'chat-output'
-        result = client.put('/api/settings', json={'computer': {'enabled': True, 'workspace': str(workspace)}})
+        result = client.put('/api/settings', json={'computer': {'enabled': True, 'runtime': 'local', 'workspace': str(workspace)}})
         assert result.status_code == 200, result.text
         counts = {'chat': 0, 'computer': 0}
         async def complete(messages, **kwargs):

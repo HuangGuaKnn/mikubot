@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from qunyu.db import Store
-from qunyu.chat import ChatService
-from qunyu.official import OfficialBridge
-from qunyu.onebot import OneBotBridge
-from qunyu.output import split_output
-from qunyu.settings import DEFAULTS
-from qunyu.social import SocialEngine
+from mikubot.chat import ChatService
+from mikubot.official import OfficialBridge
+from mikubot.onebot import OneBotBridge
+from mikubot.output import split_output
+from mikubot.settings import DEFAULTS
+from mikubot.social import SocialEngine
 
 
 @pytest.fixture

@@ -93,7 +93,7 @@ def local_model_fixture():
 
 
 def smoke_experience(request, upload, data, exe):
-    resource = exe.parent / '_internal/qunyu/resources/csp'
+    resource = exe.parent / '_internal/mikubot/resources/csp'
     for relative in ('SKILL.md', 'LICENSE', 'references/persona-template.md', 'references/distillation-framework.md',
                      'references/character-mode.md', 'references/corpus-mode.md'):
         assert (resource / relative).is_file(), 'Missing frozen CSP resource: ' + relative
@@ -199,7 +199,7 @@ def main():
     parser.add_argument('exe', type=Path)
     parser.add_argument('--data-dir', required=True, type=Path)
     parser.add_argument('--port', type=int, default=18767)
-    parser.add_argument('--expect-version', '--expect', dest='expect_version', default='0.1.0')
+    parser.add_argument('--expect-version', '--expect', dest='expect_version', default='0.1.1')
     parser.add_argument('--mcp-fixture-url', default='')
     args = parser.parse_args()
     data = args.data_dir.resolve()

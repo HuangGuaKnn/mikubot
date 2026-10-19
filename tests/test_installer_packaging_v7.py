@@ -6,7 +6,7 @@ import pytest
 
 from scripts.package_portable import package
 from scripts.prepare_installer import prepare
-from qunyu import installer
+from mikubot import installer
 
 
 def source_tree(tmp_path):

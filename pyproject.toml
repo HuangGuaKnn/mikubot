@@ -7,21 +7,27 @@ name = "mikubot"
 dynamic = ["version", "dependencies"]
 description = "Local QQ companion and administrator-authorized task assistant"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.11,<3.14"
 classifiers = [
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
 ]
 
 [project.scripts]
-mikubot = "qunyu.__main__:main"
+mikubot = "mikubot.__main__:main"
 
 [tool.setuptools.dynamic]
-version = {attr = "qunyu.__version__"}
-dependencies = {file = ["requirements.txt"]}
+version = {attr = "mikubot.__version__"}
+dependencies = {file = ["requirements-server.txt"]}
+
+[project.optional-dependencies]
+desktop = ["pystray==0.19.5; sys_platform == 'win32'", "pywebview==6.2.1; sys_platform == 'win32'", "pythonnet==3.2.1; sys_platform == 'win32'", "clr_loader==0.3.1; sys_platform == 'win32'"]
 
 [tool.setuptools.packages.find]
-include = ["qunyu*"]
+include = ["mikubot*", "qunyu*"]
 
 [tool.setuptools.package-data]
-qunyu = ["static/*", "static/assets/brand/*", "resources/csp/*", "resources/csp/references/*"]
+mikubot = ["static/*", "static/assets/brand/*", "resources/csp/*", "resources/csp/references/*"]

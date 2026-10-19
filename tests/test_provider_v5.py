@@ -6,8 +6,8 @@ import httpx
 import pytest
 
 from qunyu.db import Store
-from qunyu.provider import Provider, ProviderError, estimate_tokens
-from qunyu.settings import DEFAULTS, PROVIDER_DEFAULTS, Settings
+from mikubot.provider import Provider, ProviderError, estimate_tokens
+from mikubot.settings import DEFAULTS, PROVIDER_DEFAULTS, Settings
 
 
 @pytest.fixture

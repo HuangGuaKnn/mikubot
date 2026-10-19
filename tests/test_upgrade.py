@@ -8,12 +8,12 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from qunyu.api import create_app
-from qunyu.chat import ChatService
+from mikubot.api import create_app
+from mikubot.chat import ChatService
 from qunyu.db import Store
-from qunyu.documents import extract_document
-from qunyu.provider import Provider, ProviderError
-from qunyu.settings import Settings
+from mikubot.documents import extract_document
+from mikubot.provider import Provider, ProviderError
+from mikubot.settings import Settings
 from auth_helpers import password_login
 
 

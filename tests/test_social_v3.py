@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from qunyu.db import Store
-from qunyu.onebot import OneBotBridge
-from qunyu.settings import DEFAULTS
-from qunyu.social import SocialEngine
+from mikubot.onebot import OneBotBridge
+from mikubot.settings import DEFAULTS
+from mikubot.social import SocialEngine
 
 
 @pytest.fixture

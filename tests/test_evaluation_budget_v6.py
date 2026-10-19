@@ -7,9 +7,9 @@ import httpx
 import pytest
 
 from qunyu.db import Store
-from qunyu.evaluation import load_replay_config, read_initial_usage, replay
-from qunyu.provider import estimate_tokens
-from qunyu.settings import DEFAULTS, Settings
+from mikubot.evaluation import load_replay_config, read_initial_usage, replay
+from mikubot.provider import estimate_tokens
+from mikubot.settings import DEFAULTS, Settings
 
 
 @pytest.fixture

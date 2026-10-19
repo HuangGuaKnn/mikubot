@@ -6,8 +6,8 @@ from copy import deepcopy
 import pytest
 
 from qunyu.db import Store
-from qunyu.settings import DEFAULTS, resolved_identity
-from qunyu.social import SocialEngine
+from mikubot.settings import DEFAULTS, resolved_identity
+from mikubot.social import SocialEngine
 
 
 @pytest.fixture
@@ -215,7 +215,7 @@ async def test_queued_planner_payload_is_not_dispatched_after_authorization_chan
 
 @pytest.mark.anyio
 async def test_deleted_knowledge_cannot_reenter_planner_from_assistant_history(setup):
-    from qunyu.chat import ChatService
+    from mikubot.chat import ChatService
     from datetime import datetime, timedelta, timezone
     store, settings, provider, _ = setup
     chat = ChatService(store, settings, provider)

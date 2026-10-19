@@ -6,11 +6,11 @@ from copy import deepcopy
 
 import pytest
 from fastapi.testclient import TestClient
-from qunyu.api import create_app
-from qunyu.chat import ChatService
+from mikubot.api import create_app
+from mikubot.chat import ChatService
 from qunyu.db import Store
-from qunyu.settings import DEFAULTS
-from qunyu.evaluation import replay,validate_cases
+from mikubot.settings import DEFAULTS
+from mikubot.evaluation import replay,validate_cases
 from auth_helpers import password_login
 
 

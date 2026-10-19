@@ -9,12 +9,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from auth_helpers import password_login
-from qunyu.api import create_app
-from qunyu.catalog_api import install_catalog
-from qunyu.model_catalog import ModelCatalog
+from mikubot.api import create_app
+from mikubot.catalog_api import install_catalog
+from mikubot.model_catalog import ModelCatalog
 from qunyu.db import Store
-from qunyu.provider import Provider
-from qunyu.settings import Settings, resolve_model
+from mikubot.provider import Provider
+from mikubot.settings import Settings, resolve_model
 
 
 SECRET = 'isolated-catalog-key-39'

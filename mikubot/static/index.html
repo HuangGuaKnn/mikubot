@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#169e96">
+  <title>mikubot · 聊天与电脑助手</title>
+  <link rel="icon" type="image/svg+xml" href="/static/assets/brand/app.svg?v=0.1.1">
+  <link rel="alternate icon" type="image/x-icon" href="/static/assets/brand/mikubot.ico?v=0.1.1">
+  <link rel="apple-touch-icon" href="/static/assets/brand/app-128.png?v=0.1.1">
+  <link rel="stylesheet" href="/static/styles.css?v=0.1.1">
+  <link rel="stylesheet" href="/static/experience.css?v=0.1.1">
+  <link rel="stylesheet" href="/static/auth.css?v=0.1.1">
+  <link rel="stylesheet" href="/static/workspace-pages.css?v=0.1.1">
+  <link rel="stylesheet" href="/static/brand.css?v=0.1.1">
+  <script src="/static/auth.js?v=0.1.1" defer></script>
+  <script src="/static/workspace-features.js?v=0.1.1" defer></script>
+  <script src="/static/quick-start.js?v=0.1.1" defer></script>
+  <script src="/static/updates.js?v=0.1.1" defer></script>
+  <script src="/static/experience.js?v=0.1.1" defer></script>
+  <script src="/static/workspace-pages.js?v=0.1.1" defer></script>
+  <script src="/static/app.js?v=0.1.1" defer></script>
+</head>
+<body>
+  <div id="auth-root"><main class="auth-page"><section class="auth-card"><div class="auth-brand"><span class="miku-mark">m<span>♪</span></span><strong>mikubot.</strong></div><p>正在检查登录状态…</p></section></main></div>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="#" aria-label="mikubot首页" data-page="overview">
+        <span class="brand-mark miku-mark" aria-hidden="true">m<span>♪</span></span>
+        <span><strong>mikubot<span class="brand-dot">.</span></strong><small>CHAT · CREATE · DO</small></span>
+      </a>
+      <div class="workspace-label"><span class="tiny-dot"></span> 本地工作空间 <span id="workspace-version">—</span></div>
+      <nav id="navigation" aria-label="主导航"></nav>
+      <div class="sidebar-bottom">
+        <button class="btn ghost sidebar-help" data-page="help">使用指南与常见问题 ↗</button>
+        <button class="sidebar-status" data-action="go-settings"><span class="status-dot" id="sidebar-status-dot"></span><span><strong id="sidebar-status-text">正在连接本地服务</strong><small id="sidebar-status-sub">你的数据，留在你的电脑</small></span><span>↗</span></button>
+      </div>
+    </aside>
+    <div class="sidebar-scrim" id="sidebar-scrim"></div>
+    <div class="main-shell">
+      <header class="topbar">
+        <div class="topbar-left"><button class="icon-button mobile-menu" id="menu-toggle" aria-label="展开导航">☰</button><span class="breadcrumb">工作空间 <span>/</span> <strong id="page-breadcrumb">概览</strong></span></div>
+        <div class="topbar-right"><label class="scope-picker"><span id="scope-icon"></span><select id="global-scope" aria-label="选择会话空间"></select></label><span class="topbar-divider"></span><button class="icon-button" data-action="refresh" title="刷新数据" aria-label="刷新数据" id="refresh-button"></button><button class="btn ghost small logout-button" data-auth-action="logout" title="退出当前登录">退出登录</button><div class="owner-avatar" title="已认证管理员 mikubot">M</div></div>
+      </header>
+      <main id="content" tabindex="-1"><div class="loading-page"><span class="spinner"></span><p>正在启动 mikubot…</p></div></main>
+      <footer class="page-footer"><span>mikubot <span id="version-label">—</span></span><span>初音未来 · 你的聊天与电脑助手</span></footer>
+    </div>
+  </div>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  <dialog id="modal" class="modal"><div id="modal-content"></div></dialog>
+  <input type="file" id="image-input" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
+  <input type="file" id="note-input" accept=".txt,.md,.markdown,.csv,.json,.pdf,.docx" hidden>
+  <input type="file" id="attachment-input" accept=".txt,.md,.markdown,.csv,.json,.jsonl,.html,.srt,.vtt,.pdf,.docx" hidden>
+  <input type="file" id="corpus-input" accept=".zip,application/zip" hidden>
+  <input type="file" id="restore-input" accept=".zip,application/zip" hidden>
+</body>
+</html>

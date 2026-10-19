@@ -13,11 +13,14 @@ import zipfile
 ROOT_FILES = {
     '.gitignore', 'README.md', 'RELEASE_NOTES.md', 'TEST_REPORT.md', 'CONTRACT.md',
     'THIRD_PARTY_NOTICES.md',
-    'pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'requirements-lock.txt',
+    'pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'requirements-lock.txt', 'requirements-server.txt', 'requirements-desktop.txt',
+    'Dockerfile', 'compose.yaml', '.dockerignore',
     'start.ps1', 'start.sh', 'launcher.py', 'installer_launcher.py',
 }
 TREE_TYPES = {
+    '.github/workflows': {'.yml', '.yaml'},
     'qunyu': {'.py'},
+    'mikubot': {'.py'},
     'docs': {'.md', '.png', '.jpg', '.jpeg', '.svg'},
     'evals': {'.json'},
     'tests': {'.py', '.cjs', '.json'},
@@ -32,7 +35,7 @@ STATIC_TYPES = {'.html', '.js', '.css', '.md', '.svg', '.png', '.jpg', '.jpeg', 
 
 
 def _linked(path: Path) -> bool:
-    return path.is_symlink() or getattr(path, 'is_junction', lambda: False)()
+    return path.is_symlink() or bool(getattr(path.lstat(),'st_file_attributes',0) & 0x400)
 
 
 def _excluded_name(name: str) -> bool:
@@ -44,7 +47,7 @@ def _excluded_name(name: str) -> bool:
 
 
 def release_version(root: Path) -> str:
-    tree = ast.parse((root / 'qunyu' / '__init__.py').read_text('utf-8-sig'))
+    tree = ast.parse((root / 'mikubot' / '__init__.py').read_text('utf-8-sig'))
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(isinstance(x, ast.Name) and x.id == '__version__' for x in node.targets):
             value = ast.literal_eval(node.value)
@@ -85,8 +88,8 @@ def source_files(root: Path) -> list[Path]:
                     continue
                 path = parent / name
                 relative = path.relative_to(base)
-                resource = tree == 'qunyu' and relative.parts[0] == 'resources'
-                static = tree == 'qunyu' and relative.parts[0] == 'static'
+                resource = tree == 'mikubot' and relative.parts[0] == 'resources'
+                static = tree == 'mikubot' and relative.parts[0] == 'static'
                 allowed = (path.suffix.casefold() in types
                            or (static and path.suffix.casefold() in STATIC_TYPES)
                            or (resource and (path.suffix.casefold() in {'.md'} or name in RESOURCE_NOTICES))

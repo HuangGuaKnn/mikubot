@@ -1,1 +1,38 @@
-__version__ = '0.1.0'
+"""Deprecated import compatibility; all implementation lives in mikubot."""
+import importlib
+import importlib.abc
+import importlib.util
+import sys
+
+from mikubot import __version__
+
+
+class _AliasLoader(importlib.abc.Loader):
+    def __init__(self, name): self.name=name
+    def create_module(self, spec):
+        module=importlib.import_module(self.name)
+        self.canonical_spec=module.__spec__
+        self.canonical_loader=module.__loader__
+        self.canonical_package=module.__package__
+        return module
+    def exec_module(self, module):
+        # importlib assigns the alias spec after create_module; restore the
+        # canonical metadata so relative imports and introspection stay valid.
+        module.__spec__=self.canonical_spec
+        module.__loader__=self.canonical_loader
+        module.__package__=self.canonical_package
+    def get_code(self, fullname):
+        return importlib.util.find_spec(self.name).loader.get_code(self.name)
+
+
+class _LegacyImports(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if not fullname.startswith('qunyu.') or fullname=='qunyu.__main__': return None
+        name='mikubot'+fullname[len('qunyu'):]
+        spec=importlib.util.find_spec(name)
+        if spec is None: return None
+        return importlib.util.spec_from_loader(fullname,_AliasLoader(name),is_package=spec.submodule_search_locations is not None)
+
+
+if not any(isinstance(finder,_LegacyImports) for finder in sys.meta_path):
+    sys.meta_path.insert(0,_LegacyImports())

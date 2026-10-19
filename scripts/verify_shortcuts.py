@@ -18,7 +18,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from qunyu import installer  # noqa: E402
+from mikubot import installer  # noqa: E402
 
 
 def powershell_string(value: str) -> str:

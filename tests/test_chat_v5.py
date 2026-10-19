@@ -3,9 +3,9 @@ import json
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
-from qunyu.chat import ChatService
+from mikubot.chat import ChatService
 from qunyu.db import Store
-from qunyu.settings import DEFAULTS
+from mikubot.settings import DEFAULTS
 
 
 class Config:
@@ -166,7 +166,7 @@ def test_named_direct_command_preserves_original_source(tmp_path):
 
 
 def test_new_scope_inherits_global_planner_and_nullable_updates(tmp_path):
-    from qunyu.settings import resolved_identity
+    from mikubot.settings import resolved_identity
     store, config = Store(tmp_path), Config()
     config.data['identity']['planner_enabled'] = False
     scope = store.upsert_scope({'id':'web:new'})

@@ -1,0 +1,10 @@
+# Headless service: no Windows GUI, .NET, WebView2 or tray dependency.
+fastapi==0.143.1
+uvicorn==0.54.0
+httpx==0.28.1
+websockets==17.2
+python-multipart==0.0.32
+qq-botpy==1.2.1
+pillow==12.3.0
+pypdf==6.20.1
+jsonschema==4.26.0

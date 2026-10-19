@@ -1,8 +1,8 @@
 import asyncio
 from copy import deepcopy
-from qunyu.chat import ChatService
+from mikubot.chat import ChatService
 from qunyu.db import Store
-from qunyu.settings import DEFAULTS
+from mikubot.settings import DEFAULTS
 
 class Config:
     def __init__(self): self.data=deepcopy(DEFAULTS)
@@ -29,7 +29,7 @@ def test_receipt_query_is_scoped_owned_and_revocable(tmp_path):
 
 def test_long_escaped_tool_result_is_valid_bounded_json():
     import json
-    from qunyu.tool_actions import bounded_result
+    from mikubot.tool_actions import bounded_result
     result=bounded_result({'text':'\\"'*15000},5000)
     assert len(json.dumps(result,ensure_ascii=False,sort_keys=True)) <= 5000
     assert result['truncated']

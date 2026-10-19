@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import qunyu.web_auth as module
-from qunyu.web_auth import AuthError, COOKIE_NAME, PASSWORD_FILE, SESSION_SECONDS, WebAuth
+import mikubot.web_auth as module
+from mikubot.web_auth import AuthError, COOKIE_NAME, PASSWORD_FILE, SESSION_SECONDS, WebAuth
 
 
 BOOTSTRAP = 'isolated-bootstrap-' + 's' * 40

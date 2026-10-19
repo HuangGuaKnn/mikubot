@@ -6,8 +6,8 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from qunyu.api import create_app
-from qunyu.settings import Settings
+from mikubot.api import create_app
+from mikubot.settings import Settings
 from auth_helpers import password_login
 
 

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from qunyu.api import create_app
+from mikubot.api import create_app
 from auth_helpers import password_login
 
 

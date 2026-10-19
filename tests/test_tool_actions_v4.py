@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock
 import pytest
 import httpx
 
-from qunyu.chat import ChatService
+from mikubot.chat import ChatService
 from qunyu.db import Store
-from qunyu.mcp_client import schema_hash
-from qunyu.provider import ProviderError
-from qunyu.settings import DEFAULTS
-from qunyu.tool_actions import ToolActions, bounded_result
+from mikubot.mcp_client import schema_hash
+from mikubot.provider import ProviderError
+from mikubot.settings import DEFAULTS
+from mikubot.tool_actions import ToolActions, bounded_result
 
 
 SCHEMA = {'type': 'object', 'properties': {'text': {'type': 'string'}},
@@ -351,7 +351,7 @@ async def test_new_web_request_invalidates_older_awaiting_approval(environment):
 
 @pytest.mark.anyio
 async def test_real_web_api_request_generation_invalidates_prior_approval(tmp_path):
-    from qunyu.api import create_app
+    from mikubot.api import create_app
     app = create_app(tmp_path, start_workers=False)
     store, chat, settings = app.state.store, app.state.chat, app.state.settings
     settings._data['mcp_servers'] = deepcopy(Settings().config['mcp_servers'])

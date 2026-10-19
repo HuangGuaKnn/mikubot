@@ -7,8 +7,8 @@ import zipfile
 
 import pytest
 
-from qunyu.corpus import corpus_chunks, inspect_corpus, read_file
-from qunyu.distillation import DistillationService
+from mikubot.corpus import corpus_chunks, inspect_corpus, read_file
+from mikubot.distillation import DistillationService
 
 
 @pytest.fixture

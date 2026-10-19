@@ -6,7 +6,7 @@ import json
 import pytest
 
 from qunyu.db import Store, TABLES
-from qunyu.memory import CHUNK_SIZE, MAX_SEMANTIC_CHUNKS, MemoryEngine, tokenize
+from mikubot.memory import CHUNK_SIZE, MAX_SEMANTIC_CHUNKS, MemoryEngine, tokenize
 
 
 @pytest.fixture

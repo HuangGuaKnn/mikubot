@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from qunyu.access import AccessManager
+from mikubot.access import AccessManager
 from qunyu.db import Store
-from qunyu.onebot import OneBotBridge
-from qunyu.official import OfficialBridge
-from qunyu.qq_pairing import LocalQQPairing, loopback_url, revision
-from qunyu.settings import Settings
+from mikubot.onebot import OneBotBridge
+from mikubot.official import OfficialBridge
+from mikubot.qq_pairing import LocalQQPairing, loopback_url, revision
+from mikubot.settings import Settings
 
 
 @pytest.fixture

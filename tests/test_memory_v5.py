@@ -5,11 +5,11 @@ import json
 import httpx
 import pytest
 
-from qunyu.context import ContextEngine
+from mikubot.context import ContextEngine
 from qunyu.db import Store
-from qunyu.memory import MemoryEngine
-from qunyu.provider import Provider
-from qunyu.settings import DEFAULTS
+from mikubot.memory import MemoryEngine
+from mikubot.provider import Provider
+from mikubot.settings import DEFAULTS
 
 
 @pytest.fixture

@@ -7,15 +7,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from auth_helpers import FIXTURE_PASSWORD, password_login
-from qunyu.api import create_app
-from qunyu.auth_api import BOOTSTRAP_COOKIE
-from qunyu.web_auth import COOKIE_NAME
+from mikubot.api import create_app
+from mikubot.auth_api import BOOTSTRAP_COOKIE
+from mikubot.web_auth import COOKIE_NAME
 
 
 @pytest.mark.parametrize(('host','expected'), [('127.0.0.1',True),('::1',True),('::ffff:127.0.0.1',True),('::ffff:192.168.1.10',False),('192.168.1.10',False)])
 def test_peer_loopback_recognizes_ipv4_mapped_ipv6_without_trusting_headers(host, expected):
     from types import SimpleNamespace
-    from qunyu.auth_api import local_peer
+    from mikubot.auth_api import local_peer
     request = SimpleNamespace(client=SimpleNamespace(host=host), headers={'host':'127.0.0.1:8765','x-forwarded-for':'127.0.0.1'})
     assert local_peer(request) is expected
 
@@ -35,6 +35,8 @@ def test_https_reverse_proxy_keeps_remote_identity_and_requires_declared_origin(
     password_login(local, app)
     app.state.settings.update({'webui': {'allowed_hosts':['bot.example.com'], 'public_url':'https://bot.example.com'}})
     with TestClient(app, base_url='http://bot.example.com', client=('127.0.0.1',41004)) as proxy:
+        assert proxy.get('/api/auth/status').status_code==403
+        proxy.headers.update({'x-forwarded-proto':'https'})
         assert proxy.post('/api/auth/bootstrap',json={'token':app.state.settings.token},headers={'Origin':'https://bot.example.com'}).status_code == 403
         assert proxy.get('/api/auth/status').json()['local_setup_allowed'] is False
         assert 'password_file' not in proxy.get('/api/auth/status').json()
@@ -62,7 +64,7 @@ def clients(tmp_path):
     # still reject remote access while the first password is pending.
     app.state.settings.update({'webui': {'remote_enabled': True}})
     with TestClient(app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 41001)) as local:
-        remote = TestClient(app, base_url='http://192.168.1.2:8765', client=('192.168.1.10', 41002))
+        remote = TestClient(app, base_url='https://192.168.1.2:8765', client=('192.168.1.10', 41002))
         try:
             yield local, remote, app
         finally:

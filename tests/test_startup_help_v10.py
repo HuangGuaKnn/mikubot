@@ -2,19 +2,15 @@ from types import SimpleNamespace
 
 import pytest
 
-import qunyu.__main__ as launcher
+import mikubot.__main__ as launcher
 
 
-@pytest.mark.parametrize('choice,expected', [(6, True), (7, False)])
-def test_desktop_failure_offers_explicit_browser_choice(tmp_path, monkeypatch, choice, expected):
+def test_desktop_failure_automatically_falls_back_with_system_notification(tmp_path, monkeypatch):
     shown = []
     monkeypatch.setattr(launcher, 'os', SimpleNamespace(name='nt'))
-    monkeypatch.setattr(launcher.ctypes, 'windll', SimpleNamespace(user32=SimpleNamespace(
-        MessageBoxW=lambda *args: shown.append(args) or choice)), raising=False)
-    assert launcher._desktop_error(RuntimeError('WebView2 missing'), tmp_path, 8765) is expected
-    assert shown[0][3] == 0x24
-    assert '是否改用系统浏览器继续' in shown[0][1]
-    assert '下次启动仍优先使用桌面窗口' in shown[0][1]
+    monkeypatch.setattr(launcher,'notify_info',shown.append)
+    assert launcher._desktop_error(RuntimeError('WebView2 missing'), tmp_path, 8765) is True
+    assert '已切换至默认浏览器模式' in shown[0]
 
 
 def prepare_main(tmp_path, monkeypatch, instances):

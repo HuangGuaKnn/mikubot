@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from auth_helpers import password_login
-from qunyu.api import create_app
+from mikubot.api import create_app
 
 
 def frontend_requests(settings):
@@ -33,7 +33,7 @@ for(const file of ['quick-start.js','workspace-pages.js'])vm.runInContext(fs.rea
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
     result = subprocess.run([node, '-e', script], input=json.dumps({
-        'static': str(Path(__file__).resolve().parents[1] / 'qunyu' / 'static'),
+        'static': str(Path(__file__).resolve().parents[1] / 'mikubot' / 'static'),
         'settings': settings, 'source_model': next(item['id'] for item in settings['providers'] if item.get('source_id')),
     }), capture_output=True, text=True, encoding='utf-8', timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr

@@ -4,14 +4,14 @@ if ($PortableOnly -and $InstallerOnly) { throw 'PortableOnly 与 InstallerOnly �
 $taskRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $taskRoot
 $taskPython = Join-Path $taskRoot '.venv\Scripts\python.exe'
-$taskVersion = (& $taskPython -c 'from qunyu import __version__; print(__version__)').Trim()
+$taskVersion = (& $taskPython -c 'from mikubot import __version__; print(__version__)').Trim()
 $taskVersionResources = Join-Path $taskRoot ('build\version-v' + $taskVersion)
 $taskAppVersionFile = Join-Path $taskVersionResources 'app.version.txt'
 $taskInstallerVersionFile = Join-Path $taskVersionResources 'installer.version.txt'
 $taskDistributionRoot = Join-Path $taskRoot ('dist\v' + $taskVersion)
 $taskOutput = Join-Path $taskDistributionRoot 'mikubot'
 $taskExistingData = Join-Path $taskOutput 'data'
-$taskBrandAssets = Join-Path $taskRoot 'qunyu\static\assets\brand'
+$taskBrandAssets = Join-Path $taskRoot 'mikubot\static\assets\brand'
 $taskAppIcon = Join-Path $taskBrandAssets 'mikubot.ico'
 if (-not (Test-Path -LiteralPath $taskAppIcon)) {
     & $taskPython scripts/build_icons.py
@@ -23,7 +23,7 @@ if (Test-Path -LiteralPath $taskExistingData) {
 if (-not $InstallerOnly) {
     & $taskPython scripts/write_windows_version.py $taskAppVersionFile --version $taskVersion --kind app
     if ($LASTEXITCODE -ne 0) { throw 'Windows 程序版本资源生成失败' }
-    & $taskPython -m PyInstaller --noconfirm --clean --onedir --windowed --name mikubot --icon $taskAppIcon --version-file $taskAppVersionFile --distpath $taskDistributionRoot --add-data 'qunyu/static;qunyu/static' --add-data 'qunyu/resources;qunyu/resources' --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on --hidden-import pystray._win32 --hidden-import webview.platforms.winforms --hidden-import webview.platforms.edgechromium --collect-all webview --collect-all pythonnet --collect-all clr_loader --collect-all botpy --collect-all tzdata launcher.py
+    & $taskPython -m PyInstaller --noconfirm --clean --onedir --windowed --name mikubot --icon $taskAppIcon --version-file $taskAppVersionFile --distpath $taskDistributionRoot --add-data 'mikubot/static;mikubot/static' --add-data 'mikubot/resources;mikubot/resources' --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on --hidden-import pystray._win32 --hidden-import webview.platforms.winforms --hidden-import webview.platforms.edgechromium --collect-all webview --collect-all pythonnet --collect-all clr_loader --collect-all botpy --collect-all tzdata launcher.py
     if ($LASTEXITCODE -ne 0) { throw 'Windows 打包失败' }
 } elseif (-not (Test-Path -LiteralPath (Join-Path $taskOutput 'mikubot.exe'))) {
     throw '请先构建完整程序后再使用 InstallerOnly'
@@ -54,7 +54,7 @@ if (-not $PortableOnly) {
     $taskInstallerName = 'mikubot-' + $taskVersion + '-Windows-Setup'
     & $taskPython scripts/write_windows_version.py $taskInstallerVersionFile --version $taskVersion --kind installer
     if ($LASTEXITCODE -ne 0) { throw 'Windows 安装器版本资源生成失败' }
-    & $taskPython -m PyInstaller --noconfirm --clean --onefile --windowed --name $taskInstallerName --icon $taskAppIcon --version-file $taskInstallerVersionFile --distpath (Join-Path $taskRoot 'dist') --workpath (Join-Path $taskRoot ('build\setup-v' + $taskVersion)) --add-data ($taskInstallerPayload + ';installer_payload') --add-data ($taskBrandAssets + ';qunyu/static/assets/brand') installer_launcher.py
+    & $taskPython -m PyInstaller --noconfirm --clean --onefile --windowed --name $taskInstallerName --icon $taskAppIcon --version-file $taskInstallerVersionFile --distpath (Join-Path $taskRoot 'dist') --workpath (Join-Path $taskRoot ('build\setup-v' + $taskVersion)) --add-data ($taskInstallerPayload + ';installer_payload') --add-data ($taskBrandAssets + ';mikubot/static/assets/brand') installer_launcher.py
     if ($LASTEXITCODE -ne 0) { throw '一键安装包构建失败' }
     $taskInstaller = Join-Path $taskRoot ('dist\' + $taskInstallerName + '.exe')
     foreach ($taskArtifact in @($taskArchive, $taskInstaller)) {

@@ -1,0 +1,42 @@
+"use strict";
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const node={innerHTML:''},calls=[];let confirm=null,polls=0;
+const release={id:12,tag:'v0.1.2',name:'Release <script>x</script>',notes:'<img src=x onerror=bad()>',published_at:'2026-10-19',relation:'newer',prerelease:false,
+  url:'https://github.com/iownmmiku/mikubot/releases/tag/v0.1.2',assets:{installer:{name:'setup.exe',size:123,verified_download_available:true},source:{name:'source.zip',size:20,verified_download_available:true}}};
+let result={current_version:'0.1.1',mode:'installed',default_kind:'installer',install_supported:true,local_install_allowed:true,
+  releases:[],download:{status:'idle'},releases_url:'https://github.com/iownmmiku/mikubot/releases',page:1,include_prerelease:false};
+let fail=false;
+const sandbox={window:{},state:{page:'settings',authenticated:true},document:{hidden:false},e:esc,fmt:String,icon:()=>'',notice:text=>esc(text),
+  button:(label,action,style,symbol,extra='')=>`<button data-action="${action}" ${extra}>${esc(label)}</button>`,
+  select:(name,label,options,value)=>`<select name="${name}" aria-label="${label}">${options.map(([id,text])=>`<option value="${id}" ${id===value?'selected':''}>${esc(text)}</option>`).join('')}</select>`,
+  $:selector=>selector==='#updates-section'?node:null,toast(){},setTimeout:()=>++polls,clearTimeout(){},
+  confirmAction:async(a,b,callback)=>{confirm={a,b,callback};},
+  api:async(url,options)=>{calls.push({url,options});if(fail)throw Error('network failed');return structuredClone(result);}};
+vm.createContext(sandbox);vm.runInContext(fs.readFileSync(path.join(__dirname,'../mikubot/static/updates.js'),'utf8'),sandbox);
+(async()=>{
+  const ui=sandbox.window.MikubotUpdates;
+  assert.match(await ui.settingsPanel(),/0\.1\.1/);assert.deepEqual(calls.map(x=>x.url),['/api/updates'],'render does not contact GitHub');
+  result={...result,releases:[release],checked_at:'2026-10-19'};
+  await ui.handleAction('update-check',{});
+  assert.equal(calls.at(-1).url,'/api/updates/check');assert.equal(calls.at(-1).options.body.include_prerelease,false);
+  assert.ok(node.innerHTML.includes('&lt;script&gt;') && node.innerHTML.includes('&lt;img'));
+  assert.ok(!node.innerHTML.includes('<script>') && !node.innerHTML.includes('<img'));
+  await ui.handleChange({name:'update-kind',value:'source'});
+  await ui.handleAction('update-download',{});
+  assert.equal(calls.at(-1).options.body.kind,'source');assert.equal(calls.at(-1).options.body.release_id,12);
+  result={...result,download:{status:'ready',id:'verified',kind:'installer',name:'setup.exe',file_url:'/api/updates/files/verified',can_install:true}};
+  await ui.handleAction('update-status',{});
+  const before=calls.length;await ui.handleAction('update-install',{});
+  assert.equal(calls.length,before,'install waits for explicit product confirmation');
+  await confirm.callback();assert.equal(calls.at(-1).url,'/api/updates/install');assert.equal(sandbox.state.stopped,true);
+  result.local_install_allowed=false;sandbox.state.stopped=false;
+  await ui.handleAction('update-status',{});
+  assert.ok(!node.innerHTML.includes('data-action="update-install"'));
+  await assert.rejects(ui.handleAction('update-install',{}),/运行电脑/);
+  fail=true;await ui.handleAction('update-check',{});assert.match(node.innerHTML,/network failed/);
+  fail=false;result.mode='source';result.download.can_install=false;
+  await ui.handleAction('update-status',{});assert.match(node.innerHTML,/未提交改动不会被覆盖/);
+  await ui.handleChange({id:'update-prerelease',checked:true});assert.equal(calls.at(-1).options.body.include_prerelease,true);
+  ui.close();console.log('Update UI selection, escaping, and explicit install checks passed');
+})().catch(error=>{console.error(error);process.exitCode=1;});

@@ -12,7 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSETS = ROOT / 'qunyu' / 'static' / 'assets' / 'brand'
+ASSETS = ROOT / 'mikubot' / 'static' / 'assets' / 'brand'
 SIZES = (16, 20, 24, 32, 48, 64, 128, 256)
 INK = '#10464c'
 MINT = '#52dfd0'

@@ -21,7 +21,7 @@ const sandbox={window:{MikubotQuickStart:{diagnosticsPanel:()=>"",modelSelection
   renderPersonas:async()=>'<h1>人格</h1><button data-action="new-persona" >创造人格</button>',renderSettings:async()=>'<div class="settings-main"><form data-form="qq"></form></div>',
 };
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(__dirname,"../qunyu/static/experience.js"),"utf8"),sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname,"../mikubot/static/experience.js"),"utf8"),sandbox);
 const ui=sandbox.window.MikubotExperience;
 const plain=value=>JSON.parse(JSON.stringify(value));
 
@@ -120,6 +120,7 @@ async function fullScriptIntegration(){
       else if(url==="/api/auth/status")data={authenticated:true,mode:"password",password_set:true,remote_enabled:false};
       else if(url==="/api/auth/access")data={remote_enabled:false,host:"0.0.0.0",port:8765};
       else if(url==="/api/settings")data=settings;
+      else if(url==="/api/bot-profiles")data={default_id:'default',items:[{id:'default',name:'默认配置',values:{persona_id:'default'}}],scopes:[]};
       else if(url==="/api/qq/status"||url==="/api/providers/status")data={};
       else if(url==="/api/system")data={supported:false};
       else if(url.startsWith("/api/diagnostics"))data={checks:[],model:{configured:false},qq:{enabled:false}};
@@ -127,7 +128,7 @@ async function fullScriptIntegration(){
     scrollTo(){},navigator:{},
   };
   browser.window=browser;vm.createContext(browser);
-  for(const file of ["auth.js","workspace-features.js","quick-start.js","experience.js","workspace-pages.js","app.js"])vm.runInContext(fs.readFileSync(path.join(__dirname,"../qunyu/static",file),"utf8"),browser,{filename:file});
+  for(const file of ["auth.js","workspace-features.js","quick-start.js","experience.js","workspace-pages.js","app.js"])vm.runInContext(fs.readFileSync(path.join(__dirname,"../mikubot/static",file),"utf8"),browser,{filename:file});
   await new Promise(resolve=>setTimeout(resolve,10));
   assert.match(element("#navigation").innerHTML,/机器人管理/);
   assert.match(element("#content").innerHTML,/聊天模式/);
