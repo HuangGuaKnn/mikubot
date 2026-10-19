@@ -258,13 +258,17 @@ def _run_instance(data, args, parser):
     app.state.identity = identity
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, access_log=False,
         log_level='warning', log_config=None, proxy_headers=False, ws_max_size=8 * 1024 * 1024))
-    app.state.shutdown = lambda: setattr(server, 'should_exit', True)
+    app.state.shutdown_requested = False
+    def shutdown():
+        app.state.shutdown_requested = True
+        server.should_exit = True
+    app.state.shutdown = shutdown
     url = f'http://127.0.0.1:{port}/#bootstrap={settings.token}'
     desktop = os.name == 'nt' and not args.browser and not args.no_browser
     shell = None
     if desktop:
         from .desktop import DesktopShell
-        shell = DesktopShell(url, data, stop=app.state.shutdown)
+        shell = DesktopShell(url, data, stop=lambda: setattr(server, 'should_exit', True))
     icon = None
     activation = None
     thread = None
@@ -278,7 +282,7 @@ def _run_instance(data, args, parser):
             webbrowser.open(url)
 
     def quit_app(*_):
-        server.should_exit = True
+        app.state.shutdown()
         if shell:
             shell.close()
 
@@ -354,7 +358,8 @@ def _run_instance(data, args, parser):
             except DesktopUnavailable as exc:
                 server.should_exit = True
                 thread.join(timeout=30)
-                use_browser = _desktop_error(exc, data, port)
+                if not app.state.shutdown_requested:
+                    use_browser = _desktop_error(exc, data, port)
         else:
             if not args.no_browser:
                 def open_when_ready():
