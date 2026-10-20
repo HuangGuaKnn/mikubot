@@ -223,7 +223,7 @@ class Provider:
 
     @staticmethod
     def _same_model(left, right):
-        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds')
+        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type')
         return all(left.get(key) == right.get(key) for key in fields)
 
     def _check_send(self, before_send):
@@ -323,6 +323,8 @@ class Provider:
         if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 100000:
             raise ProviderError('max_tokens 须为 1—100000 的整数')
         primary = dict(config) if config is not None else self.resolve(purpose, scope_id)
+        if primary.get('model_type') == 'embedding':
+            raise ProviderError('嵌入模型不能生成聊天回复，请选择对话模型')
         route_snapshot = dict(primary)
         candidates = [primary]
         if config is None:
@@ -496,20 +498,25 @@ class Provider:
         except httpx.HTTPError as exc:
             raise ProviderError('无法读取模型列表，仍可手动填写模型名。') from exc
 
-    async def embed(self, texts, *, scope_id='web:default', before_send=None):
+    async def embed(self, texts, *, scope_id='web:default', before_send=None, config=None):
         """Embeddings share atomic budget reservations with chat requests."""
         if not isinstance(texts, list) or not 1 <= len(texts) <= 32 or any(not isinstance(x, str) or not x.strip() or len(x) > 6000 for x in texts) or sum(map(len, texts)) > 48000:
             raise ProviderError('向量请求须为 1—32 个非空片段，每段最多 6000 字、合计最多 48000 字')
-        config = self.settings.get()
-        cfg, memory = resolve_model(config, 'embedding'), config.get('memory', {})
+        current_config = self.settings.get()
+        testing = config is not None
+        cfg = dict(config) if testing else resolve_model(current_config, 'embedding')
+        memory = current_config.get('memory', {})
         async with self._provider_slot(cfg):
-            if not memory.get('semantic_enabled') or not cfg.get('model') or not cfg.get('base_url'):
+            if (not testing and not memory.get('semantic_enabled')) or not cfg.get('model') or not cfg.get('base_url') or not cfg.get('enabled', True):
                 raise ProviderError('语义检索未启用或未填写 Embedding 模型')
+            if cfg.get('model_type') == 'chat':
+                raise ProviderError('语义检索需要嵌入模型，请检查模型类型')
             url = endpoint(cfg['base_url'], 'embeddings')
             def guard():
                 self._check_send(before_send)
                 current = self.settings.get()
-                return not current.get('paused') and current.get('memory', {}).get('semantic_enabled') and self._same_model(cfg, resolve_model(current, 'embedding'))
+                selected = resolve_model(current, 'embedding', model_id=cfg.get('id', 'default')) if testing else resolve_model(current, 'embedding')
+                return not current.get('paused') and (testing or current.get('memory', {}).get('semantic_enabled')) and self._same_model(cfg, selected)
             self._check_send(guard)
             estimated = sum(max(1, len(x) // 2) for x in texts)
             price = float(cfg.get('input_price', 0))
@@ -518,7 +525,7 @@ class Provider:
             started = time.monotonic()
             record, dispatched = None, False
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10), follow_redirects=False) as client:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(cfg.get('timeout_seconds', 90), connect=10), follow_redirects=False) as client:
                     self._check_reserved_limits(reservation)
                     self._check_send(guard)
                     dispatched = True
@@ -547,6 +554,7 @@ class Provider:
                           'input_tokens': tokens, 'output_tokens': 0, 'cost': tokens * price / 1000000,
                           'estimated': 'prompt_tokens' not in raw_usage and 'total_tokens' not in raw_usage,
                           'latency_ms': round((time.monotonic() - started) * 1000)}
+                self._check_send(guard)
                 return vectors
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 dispatched = False

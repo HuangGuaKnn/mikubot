@@ -293,6 +293,7 @@ document.addEventListener("click",async event => {
   const target = event.target.closest("[data-action]"); if (!target || target.disabled) return;
   const action = target.dataset.action, id = target.dataset.id, item = state.records.find(record => record.id === id);
   try {
+    if (await window.MikubotEmbedding?.handleAction(action,target)) return;
     if (await window.MikubotPages.handleAction(action,target)) return;
     if (await window.MikubotExperience.handleAction(action,target)) return;
     if (await window.MikubotQuickStart.handleAction(action,target)) return;
@@ -383,6 +384,7 @@ document.addEventListener("submit",async event => {
   if ($("#modal-error",form)) $("#modal-error",form).hidden = true;
   try {
     if (await window.MikubotPages.handleSubmit(kind,form)) return;
+    if (await window.MikubotEmbedding?.handleSubmit(kind,form)) return;
     if (await window.MikubotExperience.handleSubmit(kind,form)) return;
     if (kind === "quick-start") { await window.MikubotQuickStart.submit(form); return; }
     if (await window.MikubotFeatures.handleSubmit(kind,form)) return;
@@ -401,11 +403,13 @@ document.addEventListener("submit",async event => {
 let searchTimer;
 document.addEventListener("input",event => {
   window.MikubotPages.handleInput(event.target);
+  window.MikubotEmbedding?.handleInput(event.target);
   window.MikubotExperience.handleInput(event.target);
   if (event.target.id === "record-search") { clearTimeout(searchTimer); const value = event.target.value,selection = event.target.selectionStart; searchTimer = setTimeout(async () => { state.filters.q = value; await renderPage(); const search = $("#record-search"); if (search) { search.focus(); search.setSelectionRange(selection,selection); } },350); }
   if (event.target.id === "chat-text") { state.draft = event.target.value; event.target.style.height = "auto"; event.target.style.height = Math.min(event.target.scrollHeight,180) + "px"; }
 });
 document.addEventListener("change",async event => {
+  try { if (await window.MikubotEmbedding?.handleChange(event.target)) return; } catch (error) { toast(error.message,true); return; }
   try { if (await window.MikubotPages.handleChange(event.target)) return; } catch (error) { toast(error.message,true); return; }
   try { if (await window.MikubotExperience.handleChange(event.target)) return; } catch (error) { toast(error.message,true); return; }
   if (event.target.id === "global-scope") { if (state.sending) { event.target.value = state.scope; toast("请等待当前回复，或先停止等待。",true); return; } state.scope = event.target.value; localStorage.setItem("qunyu-scope",state.scope); state.filters = {}; state.draft = ""; state.images = []; await renderPage(); }

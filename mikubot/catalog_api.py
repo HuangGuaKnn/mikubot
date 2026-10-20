@@ -50,4 +50,12 @@ def install_catalog(app, settings, provider, store=None):
     async def update_routing(payload: dict = Body(...)):
         return catalog.update_routing(payload)
 
+    @app.put('/api/model-catalog/embedding')
+    async def configure_embedding(payload: dict = Body(...)):
+        return catalog.configure_embedding(payload)
+
+    @app.post('/api/model-catalog/embedding/test')
+    async def test_embedding(payload: dict = Body(...)):
+        return await catalog.test_embedding(payload.get('model_id'), activate=payload.get('activate', False))
+
     return catalog

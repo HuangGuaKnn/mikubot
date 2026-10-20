@@ -14,7 +14,7 @@ from .settings import PROVIDER_DEFAULTS, Settings, resolve_model
 
 PURPOSES = ('chat', 'planner', 'memory', 'gate', 'summary', 'embedding')
 _SOURCE_FIELDS = ('name', 'base_url', 'api_key', 'enabled', 'clear_api_key')
-_MODEL_FIELDS = ('name', 'model', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds')
+_MODEL_FIELDS = ('name', 'model', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type')
 
 
 class ModelCatalog:
@@ -78,7 +78,12 @@ class ModelCatalog:
                                'model': resolved.get('model') or entry.get('model', ''), 'name': entry.get('name', ''),
                                'enabled': bool(resolved.get('enabled', True)),
                                'base_url': resolved.get('base_url', '')}
-        return {'providers': providers, 'models': models, 'routing': config.get('routing', {}), 'routes': routes}
+        embedding = routes['embedding']
+        return {'providers': providers, 'models': models, 'routing': config.get('routing', {}), 'routes': routes,
+                'embedding': {'enabled': config['memory']['semantic_enabled'], 'model_id': config['routing']['embedding'],
+                              'model': embedding['model'], 'provider_name': embedding['provider_name'],
+                              'available': bool(embedding['enabled'] and embedding['model'] and embedding['base_url']),
+                              'legacy': not bool(config['routing']['embedding']), 'top_k': config['memory']['top_k']}}
 
     def save_source(self, payload, source_id=None):
         if not isinstance(payload, dict):
@@ -160,6 +165,8 @@ class ModelCatalog:
                 if any(candidate['id'] == model_id for candidate in providers):
                     raise ValueError('模型 ID 冲突，请调整模型名后重试')
                 entry = dict(PROVIDER_DEFAULTS, **{key: value for key, value in item.items() if key in _MODEL_FIELDS})
+                if 'model_type' in payload and 'model_type' not in item:
+                    entry['model_type'] = payload['model_type']
                 entry.update(id=model_id, model=model, source_id=source_id, base_url='', api_key='')
                 entry['name'] = item.get('name') or model
                 providers.append(entry)
@@ -187,6 +194,8 @@ class ModelCatalog:
             else:
                 if not any(item['id'] == model_id for item in config['providers']):
                     raise KeyError(model_id)
+                if payload.get('model_type') == 'embedding' and self.store and any(scope.get('model_id') == model_id for scope in self.store.list_scopes()):
+                    raise ValueError('该模型仍被会话用作聊天模型，请先更换会话模型')
                 providers = [dict(item, **{key: value for key, value in payload.items() if key in _MODEL_FIELDS})
                              if item['id'] == model_id else item for item in config['providers']]
                 modified = next(item for item in providers if item['id'] == model_id)
@@ -221,3 +230,46 @@ class ModelCatalog:
             routing = dict(config['routing'], **payload)
             self.settings.update({'routing': routing})
             return self.snapshot()
+
+    def configure_embedding(self, payload):
+        if not isinstance(payload, dict) or type(payload.get('enabled')) is not bool:
+            raise ValueError('请明确选择是否启用语义检索')
+        with self._lock:
+            patch = {'memory': {'semantic_enabled': payload['enabled']}}
+            if 'model_id' in payload:
+                patch['routing'] = {'embedding': payload['model_id']}
+            if payload['enabled']:
+                config = self.settings.get()
+                model_id = payload.get('model_id', config['routing']['embedding'])
+                if not isinstance(model_id, str):
+                    raise ValueError('请选择已保存的嵌入模型')
+                selected = resolve_model(config, 'embedding', model_id=model_id or 'default')
+                if not selected.get('enabled', True) or not selected.get('model') or not selected.get('base_url'):
+                    raise ValueError('所选嵌入模型不可用，请先启用模型与供应商')
+            self.settings.update(patch)
+            return self.snapshot()
+
+    async def test_embedding(self, model_id, *, activate=False):
+        if type(activate) is not bool:
+            raise ValueError('启用选项须为布尔值')
+        if not isinstance(model_id, str):
+            raise ValueError('请选择已保存的嵌入模型')
+        config = self.settings.get()
+        if model_id and not any(item['id'] == model_id for item in config['providers']):
+            raise ValueError('嵌入模型不存在，请刷新列表')
+        cfg = resolve_model(config, 'embedding', model_id=model_id or 'default')
+        if cfg.get('model_type') == 'chat':
+            raise ValueError('该配置是对话模型，请添加嵌入模型配置')
+        if not cfg.get('enabled', True) or not cfg.get('base_url') or not cfg.get('model'):
+            raise ValueError('嵌入模型或供应商尚未配置完成或已停用')
+        import time
+        started = time.monotonic()
+        vectors = await self.provider.embed(['mikubot 语义检索连接测试'], config=cfg)
+        if activate:
+            with self._lock:
+                current = resolve_model(self.settings.get(), 'embedding', model_id=model_id or 'default')
+                if not self.provider._same_model(cfg, current):
+                    raise ValueError('测试期间模型配置已改变，请重新测试；检索设置未修改')
+                self.configure_embedding({'model_id': model_id, 'enabled': True})
+        return {'ok': True, 'dimension': len(vectors[0]), 'model': cfg['model'],
+                'elapsed_ms': round((time.monotonic() - started) * 1000), 'activated': activate}

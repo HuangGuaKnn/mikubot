@@ -9,3 +9,8 @@
 .modal form[data-form="model-source"] .modal-footer{flex-shrink:0;background:#f8fcfb}
 .release-update-notes { white-space:pre-wrap; overflow-wrap:anywhere; max-height:22rem; overflow:auto; padding:14px; background:var(--surface-soft,#f1f7f6); border-radius:10px; font:inherit; }
 #updates-section progress { width:100%; accent-color:var(--accent,#117e7a); }
+.model-type-tabs{display:flex;gap:8px;margin:0 0 22px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.model-catalog-layout>*{min-width:0}.model-source-list{min-width:0;max-width:100%}.catalog-model-toolbar>.search-field{min-width:0}.catalog-model-actions{min-width:0;max-width:100%}
+.embedding-status{display:flex;gap:16px;justify-content:space-between;align-items:center;padding:20px 24px;margin-bottom:20px}.embedding-status h2{font-size:17px}.embedding-status p{margin-top:8px;overflow-wrap:anywhere}.embedding-status .section-actions{flex-shrink:0;margin:0}
+.modal:has(form[data-form^="embedding-"]) #modal-content{display:flex;flex-direction:column;max-height:calc(100dvh - 60px)}.modal form[data-form^="embedding-"]{display:flex;flex-direction:column;min-height:0}.modal form[data-form^="embedding-"] .modal-body{overflow-y:auto;min-height:0}.modal form[data-form^="embedding-"] .modal-footer{flex-shrink:0}
+@media(max-width:760px){.model-catalog-layout{grid-template-columns:minmax(0,1fr)}.embedding-status{display:block;padding:18px}.embedding-status .section-actions{margin-top:14px}}

@@ -69,7 +69,7 @@ async function main(){
   const beforeSave=calls.length;await ui.handleSubmit("model-source",quickForm);
   const savedCalls=calls.slice(beforeSave);
   assert.equal(savedCalls[0][0],"/api/model-providers");assert.equal(savedCalls[0][1].body.enabled,true);
-  assert.deepEqual(plain(savedCalls[1][1].body),{provider_id:"p2",models:["manual-chat"]},"manual name is the explicit fallback choice");
+  assert.deepEqual(plain(savedCalls[1][1].body),{provider_id:"p2",model_type:"chat",models:["manual-chat"]},"manual name is the explicit fallback choice");
   assert.equal(savedCalls[2][0],"/api/model/test");assert.deepEqual(plain(savedCalls[2][1].body),{provider_id:"m-new"});
   assert.equal(savedCalls[3][0],"/api/model-catalog/routing");assert.deepEqual(plain(savedCalls[3][1].body),{chat:"m-new"},"quick setup binds only after a successful model test and preserves other routes");
   assert.equal(completed,true,"saving a model returns to the next quick-start step");

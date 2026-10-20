@@ -87,6 +87,8 @@ def install_profiles(app, store, settings):
             model = profile['values'].get('model_id', '')
             if model and model != 'default' and not any(p['id'] == model for p in settings.get()['providers']):
                 raise ValueError('配置使用的模型不存在')
+            if any(p['id'] == model and p.get('model_type') == 'embedding' for p in settings.get()['providers']):
+                raise ValueError('机器人配置的聊天模型不能使用嵌入模型')
         settings.update({'bot_profiles': payload})
         return payload
 

@@ -20,7 +20,7 @@ window.MikubotQuickStart = (() => {
     const models = [{...defaults,id:"default",name:defaults.model || "原默认模型"},...(settings.providers || [])];
     return models.filter(item => {
       const source = item.source_id && (settings.provider_sources || []).find(value => value.id === item.source_id);
-      return item.model && item.enabled !== false && (item.source_id ? source && source.enabled !== false && source.base_url : item.base_url);
+      return item.model_type !== "embedding" && item.model && item.enabled !== false && (item.source_id ? source && source.enabled !== false && source.base_url : item.base_url);
     }).map(item => [item.id,`${item.source_id ? (settings.provider_sources || []).find(source => source.id === item.source_id)?.name + " · " : ""}${item.name || item.model}`]);
   }
 

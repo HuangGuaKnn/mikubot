@@ -374,6 +374,8 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
                 raise ValueError('会话模型 ID 格式不正确')
             if selected and not resolve_model(settings.get(), model_id=selected).get('enabled', True):
                 raise ValueError('请选择已启用的模型及供应商')
+            if selected and resolve_model(settings.get(), model_id=selected).get('model_type') == 'embedding':
+                raise ValueError('嵌入模型仅用于检索，请为会话选择对话模型')
         for key,low,high in (('planner_min_interval_ms',0,60000),('planner_daily_calls',0,100000),('planner_daily_tokens',0,10000000),('planner_max_age_ms',1000,120000)):
             if key in data and data[key] is not None and (type(data[key]) is not int or not low<=data[key]<=high):
                 raise ValueError(f'{key}须为空值或{low}—{high}的整数')

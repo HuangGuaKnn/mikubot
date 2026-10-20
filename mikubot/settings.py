@@ -51,7 +51,7 @@ DEFAULTS = {
     'paused': False,
 }
 
-PROVIDER_DEFAULTS = dict(DEFAULTS['model'], id='', name='', enabled=True, tools=True, source_id='')
+PROVIDER_DEFAULTS = dict(DEFAULTS['model'], id='', name='', enabled=True, tools=True, source_id='', model_type='')
 SOURCE_DEFAULTS = {'id':'','name':'','base_url':'','api_key':'','enabled':True}
 
 
@@ -438,6 +438,8 @@ class Settings:
                 if not isinstance(item['source_id'],str) or (item['source_id'] and item['source_id'] not in source_ids):
                     raise ValueError('模型引用的供应商不存在')
             for candidate in [model, *updated['providers']]:
+                if candidate.get('model_type', '') not in ('', 'chat', 'embedding'):
+                    raise ValueError('模型类型须为 chat 或 embedding；旧配置可留空')
                 candidate['base_url'] = str(candidate['base_url']).strip().rstrip('/')
                 self._validate_model_url(candidate['base_url'])
                 candidate['model'] = str(candidate['model']).strip()[:160]
@@ -462,9 +464,14 @@ class Settings:
             for key in ('chat', 'planner', 'memory', 'gate', 'summary', 'embedding'):
                 if not isinstance(routing[key], str) or routing[key] and routing[key] not in ids:
                     raise ValueError('任务路由引用了不存在的模型；删除模型前请调整路由')
+                selected = next((item for item in updated['providers'] if item['id'] == routing[key]), {})
+                if selected.get('model_type') == ('chat' if key == 'embedding' else 'embedding'):
+                    raise ValueError('嵌入模型仅用于语义检索，对话模型不能作为嵌入模型')
             fallback = routing['fallback']
             if not isinstance(fallback, list) or len(fallback) > 3 or any(x not in ids for x in fallback) or len(set(fallback)) != len(fallback):
                 raise ValueError('备用模型须为模型池中最多 3 个不同的模型')
+            if any(item.get('model_type') == 'embedding' and item['id'] in fallback for item in updated['providers']):
+                raise ValueError('嵌入模型不能作为聊天备用模型')
             context = updated['context']
             if type(context['enabled']) is not bool:
                 raise ValueError('长对话摘要开关须为布尔值')
@@ -625,6 +632,11 @@ class Settings:
                 raise ValueError('启用官方机器人前请填写 AppID 和 AppSecret')
             from .profiles import validate_profiles
             validate_profiles(updated['bot_profiles'])
+            embedding_ids = {item['id'] for item in updated['providers'] if item.get('model_type') == 'embedding'}
+            if any(profile['values'].get('model_id') in embedding_ids for profile in updated['bot_profiles']['items']):
+                raise ValueError('机器人配置的聊天模型不能使用嵌入模型')
+            if updated['stickers']['model_id'] in embedding_ids:
+                raise ValueError('表情包识图需要对话视觉模型，不能使用嵌入模型')
             for key,low,high in (('model_concurrency',1,8),('model_queue_limit',1,200),('background_queue_limit',1,100),('scope_queue_limit',1,32)):
                 value=updated['scheduler'][key]
                 if type(value) is not int or not low<=value<=high:

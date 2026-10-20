@@ -53,6 +53,8 @@ async function main() {
   const sourceSettings={routing:{chat:"source-model",memory:"keep-memory"},provider_sources:[{id:"source",name:"我的供应商",base_url:"https://source.test/v1",enabled:true},{id:"off-source",base_url:"https://off.test",enabled:false}],providers:[{id:"source-model",source_id:"source",name:"聊天模型",model:"chat-1",base_url:"",enabled:true},{id:"off",source_id:"off-source",model:"off-1",enabled:true},{id:"disabled",model:"off-2",base_url:"https://disabled.test",enabled:false}]};
   assert.equal(quick.modelSelection(sourceSettings).base_url,"https://source.test/v1","quick setup resolves the provider connection without editing it");
   assert.deepEqual(plain(quick.modelOptions(sourceSettings)),[["source-model","我的供应商 · 聊天模型"]]);
+  const withEmbedding={...sourceSettings,providers:[...sourceSettings.providers,{...sourceSettings.providers[0],id:"embedding-only",model:"embedding-fixture",model_type:"embedding"}]};
+  assert.deepEqual(plain(quick.modelOptions(withEmbedding)),[["source-model","我的供应商 · 聊天模型"]],"embedding models never appear in quick-start chat selection");
   assert.deepEqual(plain(quick.buildPatch(1,{chat_model_id:"source-model"},sourceSettings)),{routing:{chat:"source-model"}},"choosing an existing model changes only the chat route");
   assert.deepEqual(plain(quick.buildPatch(1,{chat_model_id:"default"},sandbox.state.settings)),{routing:{chat:""}},"the original default model uses an empty routing value, not a provider ID");
   assert.throws(()=>quick.buildPatch(1,{chat_model_id:"off"},sourceSettings),/已启用/);
