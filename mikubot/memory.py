@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections import Counter
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -17,6 +17,7 @@ import math
 from pathlib import Path
 import re
 import sqlite3
+import sys
 import threading
 import unicodedata
 from typing import Any, Awaitable, Callable
@@ -166,13 +167,44 @@ class _Document:
         return (header + "\n" + self.excerpt).strip()
 
 
-def _documents(records: list[dict]) -> list[_Document]:
+class _TermCache:
+    """Bounded derived tokens, never an authorization or result cache."""
+    def __init__(self, max_bytes=64 * 1024 * 1024):
+        self.max_bytes, self.bytes = max_bytes, 0
+        self.items = OrderedDict()
+        self.lock = threading.Lock()
+
+    def terms(self, text):
+        key = _digest(text)
+        with self.lock:
+            if key in self.items:
+                self.items.move_to_end(key)
+                return self.items[key][0]
+        terms = tokenize(text)
+        size = sys.getsizeof(terms) + sum(sys.getsizeof(k) + sys.getsizeof(v) for k, v in terms.items()) + 256
+        if size <= self.max_bytes:
+            with self.lock:
+                if key not in self.items:
+                    while self.items and self.bytes + size > self.max_bytes:
+                        _, (_, removed) = self.items.popitem(last=False)
+                        self.bytes -= removed
+                    self.items[key] = (terms, size)
+                    self.bytes += size
+        return terms
+
+    def clear(self):
+        with self.lock:
+            self.items.clear()
+            self.bytes = 0
+
+
+def _documents(records: list[dict], terms_fn=tokenize) -> list[_Document]:
     docs = []
     for record in records:
         text = str(record.get("content", ""))
         header = " ".join(str(record.get(key) or "")[:160] for key in ("subject", "property", "title", "filename"))
         for index, start, end, excerpt in _chunks(text):
-            docs.append(_Document(record, index, start, end, excerpt, tokenize(header + " " + excerpt)))
+            docs.append(_Document(record, index, start, end, excerpt, terms_fn(header + " " + excerpt)))
     return docs
 
 
@@ -304,6 +336,7 @@ class MemoryEngine:
         self._read_slots = asyncio.Semaphore(2)
         self._pending_reads = 0
         self._index = None
+        self._term_cache = _TermCache()
         self._generation = 0
         self._closed = False
 
@@ -329,18 +362,20 @@ class MemoryEngine:
         if not qq.get("enabled") or (section == "qq_official") != (adapter == "official"):
             return False
         if parts[1] == 'group':
-            return parts[2] in {str(item) for item in qq.get('allowed_groups', [])}
+            from .access import chat_allowed
+            return chat_allowed(config, 'qqofficial' if section == 'qq_official' else 'onebot', 'group', parts[2])
         from .access import private_allowed
         return parts[1] == 'private' and private_allowed(config, 'qqofficial' if section == 'qq_official' else 'onebot', parts[2])
 
-    def _visible(self, scope_id: str, user_id: str, config: dict | None = None) -> dict:
+    def _visible(self, scope_id: str, user_id: str, config: dict | None = None, *, record_ids=None) -> dict:
         config = self._config() if config is None else config
         if not self._permission(scope_id, config):
             return {}
         # Each shared origin must still have adapter permission too; sharing
         # never lets a revoked QQ group remain an indirect data source.
+        options = {'record_ids': record_ids} if record_ids is not None else {}
         return {record["id"]: record for record in self.store.visible_memories(scope_id, user_id,
-                scope_allowed=lambda origin: self._permission(origin, config))}
+                scope_allowed=lambda origin: self._permission(origin, config), **options)}
 
     @staticmethod
     def _request_config(config: dict) -> str:
@@ -356,7 +391,7 @@ class MemoryEngine:
             return False
         if not config.get("memory", {}).get("semantic_enabled", False) or self._request_config(config) != request_config:
             return False
-        visible = self._visible(scope_id, user_id, config)
+        visible = self._visible(scope_id, user_id, config, record_ids=[doc.record['id'] for doc in documents])
         return all(doc.record["id"] in visible and _record_hash(visible[doc.record["id"]]) == _record_hash(doc.record)
                    for doc in documents)
 
@@ -404,19 +439,26 @@ class MemoryEngine:
     def _prune_index(self) -> None:
         # Only identifiers/hashes are kept in the derived DB; even a stale cache
         # entry cannot manufacture a text result after correction or deletion.
-        active = {record["id"]: record for record in self.store.list_memories(status="active")}
-        visible_by_owner = {}
+        with self._index_lock:
+            connection = self._connection()
+            refs = connection.execute("SELECT memory_id,version,chunk_index,record_hash,signature FROM vector_refs").fetchall()
+        active, by_owner, visible_by_owner = {}, {}, {}
+        for key in {row[0] for row in refs}:
+            try: record = self.store.get_memory(key)
+            except KeyError: continue
+            if record.get('status') == 'active':
+                active[key] = record
+                by_owner.setdefault((record['scope_id'], record['user_id']), []).append(key)
+        for identity, keys in by_owner.items():
+            visible_by_owner[identity] = {item['id'] for item in self.store.visible_memories(*identity, record_ids=keys)}
         with self._index_lock:
             connection = self._connection()
             with connection:
-                refs = connection.execute("SELECT memory_id,version,chunk_index,record_hash,signature FROM vector_refs").fetchall()
                 for memory_id, version, chunk_index, record_hash, signature in refs:
                     record = active.get(memory_id)
                     valid = False
                     if record is not None:
                         identity = (record["scope_id"], record["user_id"])
-                        if identity not in visible_by_owner:
-                            visible_by_owner[identity] = {item["id"] for item in self.store.visible_memories(*identity)}
                         valid = memory_id in visible_by_owner[identity]
                     if not valid or record["version"] != version or _record_hash(record) != record_hash:
                         connection.execute("DELETE FROM vector_refs WHERE memory_id=? AND version=? AND chunk_index=? AND signature=?",
@@ -473,7 +515,7 @@ class MemoryEngine:
                 if missing:
                     # Re-select the batch after the query await, rather than
                     # merely dropping stale results after already sending text.
-                    visible = self._visible(scope_id, user_id)
+                    visible = self._visible(scope_id, user_id, record_ids=[doc.record['id'] for doc in missing])
                     missing = [doc for doc in missing if doc.record["id"] in visible
                                and _record_hash(visible[doc.record["id"]]) == _record_hash(doc.record)]
                     if missing:
@@ -485,7 +527,7 @@ class MemoryEngine:
                 if not guard() or self._signature(self._config(), dimension) != signature:
                     status["reason"] = "模型配置或索引已变化"
                     return status
-                visible = self._visible(scope_id, user_id)
+                visible = self._visible(scope_id, user_id, record_ids=[key[0] for key in cached])
                 with self._index_lock:
                     connection = self._connection()
                     with connection:
@@ -523,11 +565,39 @@ class MemoryEngine:
     def _rank_snapshot(self, scope_id, user_id, config, query):
         records = [record for record in self._visible(scope_id, str(user_id), config).values()
                    if record.get('property') != 'memory_relation']
-        docs = _documents(records)
+        docs = _documents(records, self._term_cache.terms)
         _rank_lexical(docs, query, str(user_id))
         return docs
 
+    def _current_results(self, docs, scope_id, user_id, query, limit, mode):
+        """Validate the leading candidates, replenishing any revoked results.
+
+        Cached tokens never substitute for this fresh dependency/consent check.
+        No text from an earlier scope or memory version can pass this boundary.
+        """
+        ordered = sorted((doc for doc in docs if not query.strip() or doc.bm25 > 0
+                          or doc.semantic is not None and doc.semantic >= 0.25),
+                         key=lambda item: (item.score, item.record['updated_at'], item.record['id'], -item.index), reverse=True)
+        accepted, snapshot_hashes = [], {}
+        result = []
+        for start in range(0, len(ordered), 32):
+            batch = ordered[start:start + 32]
+            current = self._visible(scope_id, user_id, record_ids=[doc.record['id'] for doc in batch])
+            hashes = {key: _record_hash(record) for key, record in current.items()}
+            for doc in batch:
+                if doc.record['id'] not in snapshot_hashes:
+                    snapshot_hashes[doc.record['id']] = _record_hash(doc.record)
+            accepted.extend(doc for doc in batch if doc.record['id'] in current
+                            and hashes[doc.record['id']] == snapshot_hashes[doc.record['id']])
+            result = _select(accepted, query, limit, mode=mode)
+            if len(result) >= limit:
+                break
+        return result
+
     async def _rank_async(self, scope_id, user_id, config, query):
+        return await self._read_async(self._rank_snapshot, scope_id, user_id, config, query)
+
+    async def _read_async(self, function, *args):
         if self._pending_reads >= 32:
             raise ValueError('记忆检索队列已满，请稍后重试')
         self._pending_reads += 1
@@ -535,7 +605,7 @@ class MemoryEngine:
             async with self._read_slots:
                 if self._closed:
                     raise RuntimeError('记忆引擎已关闭')
-                worker = asyncio.create_task(asyncio.to_thread(self._rank_snapshot, scope_id, user_id, config, query))
+                worker = asyncio.create_task(asyncio.to_thread(function, *args))
                 try:
                     return await asyncio.shield(worker)
                 except asyncio.CancelledError:
@@ -567,14 +637,14 @@ class MemoryEngine:
             raise RuntimeError('记忆引擎已关闭')
         if self._index is not None:
             try:
-                self._prune_index()
+                await self._read_async(self._prune_index)
             except (sqlite3.DatabaseError, ValueError, TypeError):
                 self.clear_index()
         semantic = {"enabled": bool(options.get("semantic_enabled", False)), "used": False,
                     "cache_hits": 0, "embedded_chunks": 0, "error": None}
         if semantic["enabled"]:
             semantic = await self._semantic(docs, query, scope_id, str(user_id), config)
-        stats = self.store.memory_use_stats(scope_id, str(user_id))
+        stats = await self._read_async(self.store.memory_use_stats, scope_id, str(user_id))
         for doc in docs:
             use = stats.get(doc.record["id"], {})
             if use.get("memory_version") == doc.record["version"]:
@@ -583,18 +653,47 @@ class MemoryEngine:
                 doc.score += min(0.06, math.log1p(use.get("count", 0)) * 0.01)
         # An awaited provider call creates a correction/privacy race. Re-read
         # the authoritative projection immediately before returning text.
-        current = self._visible(scope_id, str(user_id))
-        docs = [doc for doc in docs if doc.record["id"] in current and _record_hash(current[doc.record["id"]]) == _record_hash(doc.record)]
         mode = "hybrid" if semantic["used"] else "lexical"
-        items = _select(docs, query, limit, mode=mode)
-        related = self._related(scope_id, str(user_id), items, min(4, max(0, limit - 1))) if query.strip() else []
+        items = await self._read_async(self._current_results, docs, scope_id, str(user_id), query, limit, mode)
+        related = await self._read_async(self._related, scope_id, str(user_id), items, min(4, max(0, limit - 1)), True) if query.strip() else []
         combined = items[:max(1, limit - len(related))] + related
+        # Worker completion is another await boundary. Revalidate the small
+        # selected set synchronously so revocation during relation lookup wins.
+        wanted = {item['id'] for item in combined}
+        hashes = {}
+        for doc in docs:
+            if doc.record['id'] in wanted and doc.record['id'] not in hashes:
+                hashes[doc.record['id']] = _record_hash(doc.record)
+        refs = wanted | {key for item in combined for key in item.get('memory_versions', {})}
+        visible = self._visible(scope_id, str(user_id), record_ids=refs)
+        checked = []
+        for item in combined:
+            expected = item.pop('_validation_hash', hashes.get(item['id']))
+            current = visible.get(item['id'])
+            if (current and _record_hash(current) == expected
+                    and all(key in visible and visible[key]['version'] == version for key, version in item.get('memory_versions', {}).items())):
+                checked.append(item)
+        combined = checked
+        related = [item for item in checked if item.get('related')]
         return {"scope_id": scope_id, "user_id": str(user_id), "query": query, "mode": mode,
                 "items": combined[:limit], "results": combined[:limit], "related": related, "semantic": semantic,
                 "tokenizer": "英文整词＋中文词典分词/二字片段/低权重单字", "algorithm": "BM25 k1=1.2 b=0.75" + (" + weighted RRF" if mode == "hybrid" else "")}
 
     async def recall(self, scope_id: str, user_id: str, query: str, limit: int = 8) -> list[dict]:
         return (await self.inspect(scope_id, user_id, query, limit))["items"]
+
+    async def recall_local(self, scope_id: str, user_id: str, query: str, limit: int = 4) -> list[dict]:
+        """A cached lexical preview for the Planner; never invokes embeddings.
+
+        CPU work shares the bounded retrieval queue. Permissions and versions
+        are rechecked synchronously after the worker returns.
+        """
+        if not isinstance(query, str) or len(query) > 12000 or type(limit) is not int or not 1 <= limit <= 30:
+            raise ValueError('记忆查询或数量无效')
+        docs = await self._rank_async(scope_id, str(user_id), self._config(), query)
+        if self._closed:
+            raise RuntimeError('记忆引擎已关闭')
+        return self._current_results(docs, scope_id, str(user_id), query, limit, 'lexical')
 
     def profile(self, scope_id: str, user_id: str) -> dict:
         return self.store.profile(scope_id, str(user_id))
@@ -620,7 +719,7 @@ class MemoryEngine:
                 or record.get("visibility") == "private" and record.get("user_id") != str(user_id)):
             raise PermissionError("当前聊天无法访问此关系")
         if check_endpoints:
-            current = self._visible(scope_id, str(user_id))
+            current = self._visible(scope_id, str(user_id), record_ids=[record.get('from_id'), record.get('to_id')])
             for key in (record.get("from_id"), record.get("to_id")):
                 endpoint = current.get(key)
                 if (not endpoint or endpoint["version"] != record.get("dependencies", {}).get(key)
@@ -689,9 +788,7 @@ class MemoryEngine:
 
     def list_relations(self, scope_id: str, user_id: str, status: str | None = None) -> list[dict]:
         result = []
-        for record in self.store.list_memories(scope_id=scope_id, status=status):
-            if record.get("property") != "memory_relation":
-                continue
+        for record in self.store.memory_property_records(scope_id, 'memory_relation', status):
             try:
                 self._relation_record(record["id"], scope_id, str(user_id))
             except (KeyError, PermissionError, ValueError):
@@ -709,10 +806,15 @@ class MemoryEngine:
             self._relation_record(id, scope_id, str(user_id))
             return self.store.reject_memory(id)
 
-    def _related(self, scope_id, user_id, seeds, limit=4):
+    def _related(self, scope_id, user_id, seeds, limit=4, with_hash=False):
         if not seeds or limit <= 0:
             return []
-        current = self._visible(scope_id, user_id)
+        relations = self.store.memory_property_records(scope_id, 'memory_relation', 'active', include_shared=True)
+        if not relations:
+            return []
+        roots = [item['id'] for item in relations] + [item['id'] for item in seeds]
+        roots += [key for item in relations for key in (item.get('from_id'), item.get('to_id')) if key]
+        current = self._visible(scope_id, user_id, record_ids=roots)
         edges = [item for item in current.values() if item.get("property") == "memory_relation"]
         adjacency = {}
         for edge in edges:
@@ -733,6 +835,7 @@ class MemoryEngine:
                 new_path = path + [edge["id"], endpoint_id]
                 deps = {**versions, edge["id"]: edge["version"], endpoint_id: endpoint["version"]}
                 result.append({**endpoint, "memory_id": endpoint_id, "chunk_index": 0,
+                    **({'_validation_hash': _record_hash(endpoint)} if with_hash else {}),
                     "content": endpoint["content"][:CHUNK_SIZE], "excerpt": endpoint["content"][:CHUNK_SIZE],
                     "content_truncated": len(endpoint["content"]) > CHUNK_SIZE,
                     "original_content_length": len(endpoint["content"]), "related": True,
@@ -955,6 +1058,7 @@ class MemoryEngine:
             return {"cleared": True}
 
     def close(self) -> None:
+        self._term_cache.clear()
         with self._index_lock:
             self._generation += 1
             if self._index is not None:

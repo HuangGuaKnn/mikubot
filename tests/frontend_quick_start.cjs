@@ -58,9 +58,9 @@ async function main() {
   assert.throws(()=>quick.buildPatch(1,{chat_model_id:"off"},sourceSettings),/已启用/);
 
   const napcat = plain(quick.buildPatch(2,{adapter:"napcat",qq_enabled:true,ws_url:"",owner_ids:"123 123",allowed_groups:"456，789",app_id:"do-not-write",app_secret:"hidden"},{}));
-  assert.deepEqual(napcat,{onebot:{adapter:"napcat",enabled:true,ws_url:"",allowed_users:["123"],allowed_groups:["456","789"]},qq_official:{enabled:false}});
+  assert.deepEqual(napcat,{onebot:{chat_policy:"blacklist",adapter:"napcat",enabled:true,ws_url:"",allowed_users:["123"],allowed_groups:["456","789"]},qq_official:{enabled:false}});
   const official = plain(quick.buildPatch(2,{adapter:"official",qq_enabled:false,app_id:"app",official_groups:"group-openid",official_users:"user-openid",access_token:"do-not-write"},{}));
-  assert.deepEqual(official,{onebot:{adapter:"official",enabled:false},qq_official:{enabled:false,app_id:"app",allowed_groups:["group-openid"],allowed_users:["user-openid"]}});
+  assert.deepEqual(official,{onebot:{adapter:"official",enabled:false},qq_official:{chat_policy:"blacklist",enabled:false,app_id:"app",allowed_groups:["group-openid"],allowed_users:["user-openid"]}});
   assert.equal(quick.buildPatch(2,{adapter:"snowluma",access_token:"explicit-key"},{}).onebot.access_token,"explicit-key");
 
   quick.open();
@@ -78,7 +78,7 @@ async function main() {
   await quick.handleAction("quick-skip",{});
   assert.match(content.innerHTML,/独立安装 NapCat/);
   assert.match(content.innerHTML,/https:\/\/napneko.github.io\//);
-  assert.match(content.innerHTML,/保存名单并自动配对/);
+  assert.match(content.innerHTML,/保存并自动配对/);
   assert.match(content.innerHTML,/连接器在另一台电脑/);
   assert.match(content.innerHTML,/平台已确认回复送达/);
   assert.ok(!calls.length,"skipping steps must not make an API request or save drafts");
@@ -90,15 +90,21 @@ async function main() {
   assert.equal(JSON.stringify(sandbox.state.settings),before,"skipped drafts must never overwrite existing settings");
 
   calls.length=0;
-  await assert.rejects(quick.handleAction("quick-local-qq",{closest:()=>({values:{adapter:"napcat",owner_ids:"",allowed_groups:""}})}),/至少一个/);
+  await assert.rejects(quick.handleAction("quick-local-qq",{closest:()=>({values:{adapter:"napcat",chat_policy:"whitelist",owner_ids:"",allowed_groups:""}})}),/至少一个/);
   assert.equal(calls.length,0,"empty allowed lists do not silently enable a connector");
   responder=async()=>({onebot:{allowed_users:["old"],access_token_set:true}});
   const pairButton={disabled:false,closest:()=>({values:{adapter:"snowluma",owner_ids:"123 123",allowed_groups:"456",ws_url:"ws://old-forward.test",qq_enabled:false}})};
   await quick.handleAction("quick-local-qq",pairButton);
   assert.equal(pairButton.disabled,false);
   assert.equal(calls[0][0],"/api/settings");
-  assert.deepEqual(plain(calls[1][1].body),{onebot:{adapter:"snowluma",enabled:true,ws_url:"",allowed_users:["123"],allowed_groups:["456"]},qq_official:{enabled:false}},"automatic pairing persists the allowed list and explicitly selects reverse connection");
+  assert.deepEqual(plain(calls[1][1].body),{onebot:{chat_policy:"blacklist",adapter:"snowluma",allowed_users:["123"],allowed_groups:["456"]},qq_official:{enabled:false}},"automatic pairing saves admission without enabling a token-less connector or disturbing an old forward connection");
   assert.deepEqual(calls.at(-1),["experience","local-qq"],"the connector form opens after the list has been saved");
+
+  calls.length=0;
+  await quick.handleAction("quick-local-qq",{disabled:false,closest:()=>({values:{adapter:"napcat",chat_policy:"blacklist",owner_ids:"",allowed_groups:""}})});
+  assert.equal(calls[1][1].body.onebot.chat_policy,"blacklist");
+  assert.ok(!("enabled" in calls[1][1].body.onebot),"pairing must not enable before its generated token is saved");
+  assert.deepEqual(calls.at(-1),["experience","local-qq"],"blacklist accepts empty lists");
 
   const tips = plain(quick.recommendations({paused:true,model:{configured:false},budget:{exhausted:true},qq:{enabled:true,adapter:"official",allowed_groups:0,allowed_users:0,status:{connected:false}}}));
   assert.equal(tips.length,5);

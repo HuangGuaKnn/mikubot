@@ -106,6 +106,8 @@ class ChatService:
         self.context = ContextEngine(self.store, self.settings, self.provider)
         self.tool_actions = ToolActions(self)
         self.knowledge = PersonaKnowledge(self.store, self.settings, self.provider)
+        from .stickers import StickerLibrary
+        self.stickers = StickerLibrary(self.store,self.settings,self.provider,self.social._allowed)
         self.social.history_fn = lambda scope_id, user_id: self._history(scope_id, limit=14, user_id=user_id)
         self.social.knowledge_fn = self._planner_knowledge
         self.social.knowledge_current_fn = self._planner_knowledge_current
@@ -122,6 +124,7 @@ class ChatService:
         images = validate_images(images or [])
         message = self.store.add_message(scope_id, str(user_id), 'user', text, **dict(metadata, images=images, observed=True))
         self.social.observe(scope_id, message)
+        self.stickers.observe(message)
         self._observed_counts[(scope_id, str(user_id))] += 1
         cfg = self.settings.get()
         if cfg['memory'].get('organization_enabled',True) and self._observed_counts[(scope_id,str(user_id))] % 12 == 0:
@@ -406,7 +409,7 @@ class ChatService:
         scope=self._allowed(scope_id,user_id,{})
         # Planner gets a bounded local index. Semantic/online lookups belong to
         # the selected reply, so a decision to stay quiet does not start them.
-        memories=self.store.recall(scope_id,user_id,text,4)
+        memories=await self.memory.recall_local(scope_id,user_id,text,4)
         knowledge=self.knowledge.context(scope.get('persona_id','default'),text,limit=3) if scope.get('use_persona_knowledge',True) else []
         return {'memories':[{k:x.get(k) for k in ('id','kind','content','version')} for x in memories],
                 'persona_knowledge':[{k:x.get(k) for k in ('id','title','text','url')} for x in knowledge],
@@ -452,9 +455,7 @@ class ChatService:
         return result
 
     def _blocked_sources(self, scope_id):
-        records = (self.store.list_memories(scope_id=scope_id) + self.store.list_memories(scope_id=scope_id, status='deleted')
-                   + self.store.list_jargon(scope_id=scope_id) + self.store.list_jargon(scope_id=scope_id, status='deleted'))
-        return {id for record in records for id in record.get('blocked_source_ids', [])}
+        return self.store.blocked_memory_sources(scope_id)
 
     def _sources_changed(self, scope_id, source_ids):
         if set(source_ids) & self._blocked_sources(scope_id):
@@ -951,6 +952,7 @@ class ChatService:
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         await self.social.close()
+        await self.stickers.close()
         await self.knowledge.stop()
         self.context.close()
         self.tool_actions.close()

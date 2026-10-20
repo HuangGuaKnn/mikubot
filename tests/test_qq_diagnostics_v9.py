@@ -24,7 +24,7 @@ def anyio_backend():
 class Config:
     def __init__(self):
         self.data = deepcopy(DEFAULTS)
-        self.data['onebot'].update(enabled=True, adapter='napcat', allowed_users=['101'], allowed_groups=['202'], action_timeout_seconds=.1)
+        self.data['onebot'].update(chat_policy="whitelist", enabled=True, adapter='napcat', allowed_users=['101'], allowed_groups=['202'], action_timeout_seconds=.1)
         self.data['model'].update(base_url='https://fake.invalid/v1', model='fake')
     def get(self): return deepcopy(self.data)
 
@@ -222,7 +222,7 @@ async def test_group_scope_permission_and_paused_are_distinct(onebot):
 async def test_official_private_defaults_and_error_receipts(tmp_path):
     store, cfg = Store(tmp_path), Config()
     cfg.data['onebot']['adapter'] = 'official'
-    cfg.data['qq_official'].update(enabled=True, app_id='app', app_secret='fixture', allowed_users=['user-openid'])
+    cfg.data['qq_official'].update(chat_policy="whitelist", enabled=True, app_id='app', app_secret='fixture', allowed_users=['user-openid'])
     chat = Chat(store, cfg)
     bridge = OfficialBridge(store, cfg, chat)
     bridge._running = bridge._connected = True

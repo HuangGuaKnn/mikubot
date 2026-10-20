@@ -19,7 +19,7 @@ class Settings:
     def __init__(self):
         self.config = deepcopy(DEFAULTS)
         self.config['model'].update(base_url='https://test.invalid/v1', model='test')
-        self.config['onebot'].update(enabled=True, owner_ids=['101'], allowed_groups=['202'])
+        self.config['onebot'].update(chat_policy="whitelist", enabled=True, owner_ids=['101'], allowed_groups=['202'])
 
     def get(self):
         return deepcopy(self.config)

@@ -1,4 +1,6 @@
-# 0.1.1源码改进记录
+# 源码改进与阶段记录
+
+0.1.2整合了0.1.1之后的上手、聊天、记忆与表情包改进，详见[整改记录](LOCAL_RECTIFICATION.md)和[发行说明](../RELEASE_NOTES.md)。下方保留各阶段当时的本地状态，不能作为当前发行状态。
 
 本文件按阶段保留0.1.1开发时的本地修复、当时未发布状态及验收记录。正式发行下载见[GitHub Releases](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.1)，发行验收见[测试报告](../TEST_REPORT.md)。
 

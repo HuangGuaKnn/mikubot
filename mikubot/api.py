@@ -82,6 +82,8 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
     auth_http = install_auth(app, settings, data_dir, allow_remote=allow_remote)
     from .catalog_api import install_catalog
     install_catalog(app, settings, provider, store)
+    from .stickers_api import install_stickers
+    install_stickers(app,chat)
     from .runtime_logs import install_logs
     install_logs(app, settings, store, data_dir)
     request_gate = asyncio.Condition()
@@ -386,6 +388,10 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
     @app.get('/api/scopes')
     async def scopes(): return store.list_scopes()
 
+    @app.post('/api/scopes/{id}/inherit')
+    async def inherit_scope(id: str):
+        return store.inherit_scope(id)
+
     @app.post('/api/scopes')
     async def new_scope(payload: dict = Body(...)): return store.upsert_scope(scope_payload(payload))
 
@@ -429,8 +435,14 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
 
     @app.delete('/api/personas/{id}')
     async def delete_persona(id: str):
-        if any(p['values'].get('persona_id') == id for p in settings.get()['bot_profiles']['items']):
-            raise ValueError('请先修改使用该人格的机器人配置，再删除人格')
+        store.get_persona(id)
+        remaining = [p for p in store.list_personas() if p['id'] != id]
+        replacement = next((p['id'] for p in remaining if p['id'] == 'default'), remaining[0]['id'] if remaining else '')
+        profiles = settings.get()['bot_profiles']
+        for profile in profiles['items']:
+            if profile['values'].get('persona_id') == id:
+                profile['values']['persona_id'] = replacement
+        settings.update({'bot_profiles': profiles})
         store.delete_persona(id)
         return {'ok': True}
 
@@ -536,7 +548,10 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         return data
 
     @app.get('/api/memories')
-    async def memories(scope_id: str | None = None, q: str = '', status: str | None = None): return store.list_memories(scope_id=scope_id, q=q, status=status)
+    async def memories(scope_id: str | None = None, q: str = '', status: str | None = None, limit: int | None = None, offset: int = 0):
+        if limit is None:
+            return await asyncio.to_thread(store.list_memories, scope_id=scope_id, q=q, status=status)
+        return await asyncio.to_thread(store.memory_page, scope_id, q, status, limit=limit, offset=offset)
 
     @app.post('/api/memories')
     async def new_memory(payload: dict = Body(...)): return store.create_memory(memory_payload(payload))
@@ -548,8 +563,10 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         return store.update_memory(id, payload)
 
     @app.get('/api/memory/candidates')
-    async def memory_candidates(scope_id: str = 'web:default'):
-        return store.list_memories(scope_id=scope_id, status='pending')
+    async def memory_candidates(scope_id: str = 'web:default', q: str = '', limit: int | None = None, offset: int = 0):
+        if limit is None:
+            return await asyncio.to_thread(store.list_memories, scope_id=scope_id, q=q, status='pending')
+        return await asyncio.to_thread(store.memory_page, scope_id, q, 'pending', limit=limit, offset=offset)
 
     @app.get('/api/memory/search')
     async def memory_search(scope_id: str = 'web:default', user_id: str = 'owner', q: str = ''):
@@ -811,6 +828,7 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
                 archive.writestr('jobs_history.json',json.dumps(app.state.runs.export_history(),ensure_ascii=False))
                 includes.append('jobs_history_read_only')
                 warnings.append('任务语料、Skill包与工作目录文件需单独保存；任务历史恢复后只读，不重放。')
+                warnings.append('表情包图片库需在机器人配置→表情包中单独备份；本备份不包含图片。')
                 if chat.tool_actions.recovery_warning:
                     warnings.append('旧工具台账有恢复警告，损坏原件仍需单独保留。')
                 archive.writestr('manifest.json', json.dumps({'version': __version__, 'created_at': datetime.now(timezone.utc).isoformat(), 'secrets_included': False, 'includes': includes, 'warnings':warnings}, ensure_ascii=False))

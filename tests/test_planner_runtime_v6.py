@@ -26,7 +26,7 @@ class Settings:
     def __init__(self):
         self.config = deepcopy(DEFAULTS)
         self.config['model'].update(base_url='https://test.invalid/v1', model='mock')
-        self.config['onebot'].update(enabled=True, owner_ids=['101'], allowed_groups=['202'])
+        self.config['onebot'].update(chat_policy="whitelist", enabled=True, owner_ids=['101'], allowed_groups=['202'])
         self.config['output'].update(interval_ms=0)
 
     def get(self):
@@ -286,7 +286,7 @@ async def test_adapter_enforces_hard_limit_for_direct_reminders_without_flow(set
     chat = Chat(store, social)
     if official:
         settings.config['onebot']['adapter'] = 'official'
-        settings.config['qq_official'].update(enabled=True, allowed_groups=['gid'])
+        settings.config['qq_official'].update(chat_policy="whitelist", enabled=True, allowed_groups=['gid'])
         bridge = OfficialBridge(store, settings, chat)
         bridge._running = bridge._connected = True
         api = SimpleNamespace(post_group_message=AsyncMock(return_value={'id': 'sent'}))

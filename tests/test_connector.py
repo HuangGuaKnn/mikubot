@@ -15,7 +15,7 @@ from mikubot.social import SocialEngine
 class Config:
     def __init__(self):
         self.data = deepcopy(DEFAULTS)
-        self.data['onebot'].update(enabled=True, owner_ids=['101'], allowed_groups=['202'], access_token='local-test-only-token', action_timeout_seconds=.03)
+        self.data['onebot'].update(chat_policy="whitelist", enabled=True, owner_ids=['101'], allowed_groups=['202'], access_token='local-test-only-token', action_timeout_seconds=.03)
 
     def get(self):
         return deepcopy(self.data)

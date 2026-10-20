@@ -111,10 +111,11 @@ def test_profiles_inheritance_overrides_and_bulk_binding(tmp_path):
         assert patched['persona_id']=='default' and 'persona_id' in patched['profile_overrides']
         assert client.post('/api/bot-profiles/bind',json={'scope_ids':[key],'profile_id':'default'}).status_code==200
         assert app.state.store.get_scope(key)['persona_id']==persona['id']
-        assert client.delete('/api/personas/'+persona['id']).status_code==400
         assert client.post('/api/bot-profiles/bind',json={'scope_ids':[key,'missing'],'profile_id':'default'}).status_code==400
         assert client.put('/api/scopes/'+key,json={'profile_id':'missing'}).status_code==400
         assert app.state.store.get_scope(key)['persona_id']==persona['id']
+        assert client.delete('/api/personas/'+persona['id']).status_code==200
+        assert app.state.store.get_scope(key)['persona_id']=='default'
 
 
 def test_exception_trace_is_redacted_before_persistence(tmp_path, caplog):

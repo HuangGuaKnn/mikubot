@@ -22,8 +22,8 @@ def anyio_backend():
 class MutableSettings:
     def __init__(self):
         self.config = deepcopy(DEFAULTS)
-        self.config['onebot'].update(enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
-        self.config['qq_official'].update(enabled=True, allowed_groups=['303'], allowed_users=['101'])
+        self.config['onebot'].update(chat_policy="whitelist", enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
+        self.config['qq_official'].update(chat_policy="whitelist", enabled=True, allowed_groups=['303'], allowed_users=['101'])
 
     def get(self):
         return deepcopy(self.config)

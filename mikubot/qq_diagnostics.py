@@ -14,7 +14,7 @@ REASONS = {
     'self_message': '这是机器人账号自身发送的消息，不会再次回复自己',
     'unsupported_message': '当前消息类型不是群聊或私聊',
     'group_not_allowed': '当前群未加入允许聊天的群列表，请在 QQ 设置中添加群号或群 OpenID',
-    'private_not_allowed': '当前私聊账号未加入聊天白名单，请在 QQ 设置中添加账号，或完成管理员绑定',
+    'private_not_allowed': '当前私聊被接收规则拦截，请检查黑名单/白名单；聊天权限与管理员权限分别设置',
     'scope_disabled': '当前会话已停用，请在会话设置中启用',
     'duplicate_message': '这条平台消息已经处理，不会重复回复',
     'empty_message': '消息没有可读取的文字或图片',
@@ -38,6 +38,8 @@ REASONS = {
 def private_scope(store, scope_id):
     """Upgrade only the previously implicit default; explicit Planner choices stay."""
     scope = store.get_scope(scope_id)
+    if scope.get('profile_id') is not None:
+        return scope
     if (':private:' in scope_id and scope.get('enabled', True) and scope.get('always_reply') is False
             and scope.get('plan_enabled') is None and (scope.get('settings') or {}).get('plan_enabled') is None):
         scope = store.upsert_scope({'id': scope_id, 'always_reply': True, 'plan_enabled': False})

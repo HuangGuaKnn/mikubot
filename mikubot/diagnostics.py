@@ -86,22 +86,18 @@ def build_diagnostics(store, settings, provider, bridge):
               "tokens_remaining": max(0, tokens_limit - totals["tokens"]) if tokens_limit else None,
               "cost_remaining": max(0, cost_limit - totals["cost"]) if cost_limit else None,
               "exhausted": exhausted}
-    memories = store.list_memories()
-    jargon = store.list_jargon()
-    memory = {"pending": sum(record.get("status") == "pending" for record in memories),
-              "active": sum(record.get("status") == "active" for record in memories),
-              "jargon_pending": sum(record.get("status") == "pending" and record.get("entry_type", "jargon") != "expression" for record in jargon),
-              "expression_pending": sum(record.get("status") == "pending" and record.get("entry_type") == "expression" for record in jargon),
+    memory = {**store.memory_review_counts(),
               "semantic_enabled": bool(cfg.get("memory", {}).get("semantic_enabled")),
               "embedding_model_set": bool(cfg.get("memory", {}).get("embedding_model"))}
     scopes = store.list_scopes()
     context = {"enabled": bool(cfg.get("context", {}).get("enabled")),
                "enabled_scopes": sum(bool(scope.get("enabled", True) and scope.get("context_compress")) for scope in scopes),
-               "digests": sum(record.get("property") == "conversation_digest" and record.get("status") == "active" for record in memories)}
+               "digests": memory.pop('digests')}
     adapter = cfg.get("onebot", {}).get("adapter", "napcat")
     official = adapter == "official"
     qq_cfg = cfg.get("qq_official" if official else "onebot", {})
     qq = {"adapter": adapter, "enabled": bool(qq_cfg.get("enabled")), "status": bridge_status,
+          "chat_policy": qq_cfg.get('chat_policy', 'whitelist'),
           "allowed_groups": len(qq_cfg.get("allowed_groups") or []),
           "allowed_users": len(set(map(str, qq_cfg.get('allowed_users') or [])) |
                                (set(map(str, qq_cfg.get('owner_ids') or [])) if not official else set()))}

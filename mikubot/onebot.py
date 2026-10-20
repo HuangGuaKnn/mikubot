@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import html
 import json
 import re
@@ -14,7 +15,7 @@ from urllib.parse import urlsplit
 from .social import ConversationFlow
 from .settings import resolve_model, resolved_identity
 from .output import OutputLimitError, split_transport_output
-from .access import manager_for, private_allowed
+from .access import manager_for, private_allowed, chat_allowed
 from .qq_diagnostics import QQDiagnostics, private_scope
 
 
@@ -236,7 +237,7 @@ class OneBotBridge:
         if len(parts) != 3 or parts[0] != 'qq' or not parts[2].isdigit():
             return 'invalid_scope'
         if parts[1] == 'group':
-            return None if parts[2] in _ids(cfg.get('allowed_groups')) else 'group_not_allowed'
+            return None if chat_allowed(self.settings.get(), 'onebot', 'group', parts[2]) else 'group_not_allowed'
         if parts[1] != 'private' or (user_id is not None and user_id != parts[2]):
             return 'invalid_scope'
         return None if private_allowed(self.settings.get(), 'onebot', parts[2]) else 'private_not_allowed'
@@ -278,6 +279,11 @@ class OneBotBridge:
                 reply_id = str(data.get('id', ''))
             elif kind == 'image' and len(images) < 3:
                 source = str(data.get('url') or data.get('file') or '')
+                if source.startswith('http://'):
+                    try: host=(urlsplit(source).hostname or '').lower()
+                    except ValueError: host=''
+                    if any(host==domain or host.endswith('.'+domain) for domain in ('qpic.cn','qq.com','qq.com.cn')):
+                        source='https://'+source[len('http://'):]
                 if source.startswith(('https://', 'http://', 'data:image/')) and len(source) <= 4 * 1024 * 1024:
                     images.append(source)
         return ''.join(text).strip(), images, mentions, reply_id
@@ -321,6 +327,9 @@ class OneBotBridge:
                 self.store.add_event('admin_pairing', '已处理QQ管理员配对消息，请在管理员页面查看绑定结果', platform='onebot', account_id=user_id)
                 self._diagnostics.mark('admin_pairing', scope_id=scope_id, user_id=user_id, stage='command')
             return
+        if self._enabled() and self._rejection(scope_id, user_id) != 'invalid_scope':
+            display = payload.get('group_name', '') if message_type == 'group' else (payload.get('sender') or {}).get('nickname', '')
+            self.store.discover_scope(scope_id, display)
         rejection = self._rejection(scope_id, user_id)
         if rejection:
             self._diagnostics.mark(rejection, scope_id=scope_id, user_id=user_id)
@@ -425,6 +434,8 @@ class OneBotBridge:
         await self.send(scope_id, '这次回复没能完成，请检查本地模型、预算与运行日志后再试。', metadata=dict(metadata, failure_feedback=True))
 
     async def _emit(self, scope_id, text, metadata):
+        if metadata.get('sticker'):
+            return await self._send_part(scope_id,'',metadata=metadata)
         return await self.send(scope_id, text, metadata=metadata)
 
     def _reply_context(self, scope_id, platform_id):
@@ -460,7 +471,8 @@ class OneBotBridge:
         return bool(parts)
 
     async def _send_part(self, scope_id, text, *, metadata=None):
-        if not self._allowed(scope_id) or self._socket is None or not str(text).strip():
+        sticker=(metadata or {}).get('sticker')
+        if not self._allowed(scope_id) or self._socket is None or not str(text).strip() and not sticker:
             return False
         try:
             scope = self.store.get_scope(scope_id)
@@ -471,6 +483,13 @@ class OneBotBridge:
         _, kind, target = scope_id.split(':')
         params = {kind + '_id' if kind == 'group' else 'user_id': int(target),
                   'message': [{'type': 'text', 'data': {'text': str(text)}}]}
+        if sticker:
+            try:
+                guard=(metadata or {}).get('sticker_current')
+                if callable(guard) and not guard(): return False
+                _,raw=self.chat.stickers.payload(sticker['id'],scope_id,sticker['version'])
+                params['message']=[{'type':'image','data':{'file':'base64://'+base64.b64encode(raw).decode()}}]
+            except (KeyError,ValueError,AttributeError,TypeError): return False
         socket = self._socket
         echo = uuid.uuid4().hex
         future = asyncio.get_running_loop().create_future()
@@ -486,8 +505,12 @@ class OneBotBridge:
             confirmed = bool(result and result.get('status') == 'ok' and result.get('retcode') == 0
                              and isinstance(result.get('data'), dict) and result['data'].get('message_id') is not None)
             if not confirmed:
+                code = result.get('retcode') if isinstance(result, dict) else None
+                code = str(code)[:16] if isinstance(code, (int, float)) else None
+                self._last_error = '连接器未确认送达' + (f'（retcode={code}）' if code is not None else '')
                 self._diagnostics.mark('send_failed', scope_id=scope_id, stage='failed')
                 self.store.add_event('qq_delivery', 'QQ 发送结果未确认；请勿自动重复发送', scope_id=scope_id,
+                                     platform_code=code,
                                      output_part=(metadata or {}).get('output_part'))
             else:
                 self._diagnostics.mark('reply_failed' if (metadata or {}).get('failure_feedback') else 'sent', scope_id=scope_id,
@@ -504,7 +527,7 @@ class OneBotBridge:
         except Exception as exc:
             self._diagnostics.mark('send_failed', scope_id=scope_id, stage='failed')
             self._last_error = f'发送结果未确认（{type(exc).__name__}）'
-            self.store.add_event('qq_delivery', '发送超时或连接中断，送达状态未知', scope_id=scope_id,
+            self.store.add_exception('qq_delivery', '发送超时或连接中断，送达状态未知', exc, scope_id=scope_id,
                                  output_part=(metadata or {}).get('output_part'))
             return False
         finally:

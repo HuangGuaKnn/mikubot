@@ -1,4 +1,4 @@
-"""Length based speech chunks. Every character is retained; protected text stays whole."""
+"""Sentence-aware speech chunks. Protected text stays whole; empty chunks are omitted."""
 from __future__ import annotations
 
 import re
@@ -106,26 +106,52 @@ def split_output(text, config=None, scope=None):
     if not text:
         return []
     if not options['enabled'] or len(text) <= options['target_chars']:
-        return _hard_parts(text, options['platform_max_chars'])
+        return [part for part in _hard_parts(text, options['platform_max_chars']) if part.strip()]
     atoms = list(_atoms(text))
     parts = []
     while atoms and len(parts) < options['max_parts'] - 1:
-        total, boundary, target_boundary = 0, 0, 0
+        total, boundary = 0, 0
+        strong, weak = [], []
         for index, atom in enumerate(atoms):
             if total + len(atom) > options['max_chars'] and index:
                 break
             total += len(atom)
             boundary = index + 1
-            if atom[-1:] in '\n。！？!?；;，, ' and total >= options['target_chars'] // 2:
-                target_boundary = boundary
-            if total >= options['target_chars']:
-                break
+            end = atom[-1:]
+            if end in '\n。！？!?；;':
+                strong.append((boundary, total))
+            elif end in '，, ':
+                weak.append((boundary, total))
+            elif end == '.' and (index + 1 == len(atoms) or atoms[index + 1].isspace()):
+                strong.append((boundary, total))
         if boundary == len(atoms):
-            break
-        cut = target_boundary or boundary or 1
-        # Whitespace-only chunks cannot be sent; attach them to a later atom.
-        while cut < len(atoms) and not ''.join(atoms[:cut]).strip():
+            if total <= options['target_chars']:
+                break
+        candidates = strong or [pair for pair in weak if pair[1] >= options['target_chars'] // 2]
+        if candidates:
+            cut = min(candidates, key=lambda pair: abs(pair[1] - options['target_chars']))[0]
+        else:
+            # A target length is not a reason to cut a sentence in half. Keep
+            # it whole up to the transport limit; only that hard cap must win.
+            cut, size = 0, 0
+            for atom in atoms:
+                if size + len(atom) > options['platform_max_chars'] and cut:
+                    break
+                size += len(atom)
+                cut += 1
+                if atom[-1:] in '\n。！？!?；;' and size >= options['target_chars']:
+                    break
+        # Closing quotation marks belong to the sentence they close, including
+        # long sentences allowed to exceed the preferred length.
+        while cut < len(atoms) and atoms[cut] in '”’」』）)]':
             cut += 1
+        # Scan a whitespace prefix once instead of repeatedly joining a growing
+        # prefix when a provider emits thousands of empty lines.
+        if not ''.join(atoms[:cut]).strip():
+            while cut < len(atoms) and not atoms[cut].strip():
+                cut += 1
+            if cut < len(atoms):
+                cut += 1
         parts.append(''.join(atoms[:cut]))
         atoms = atoms[cut:]
     if atoms:
@@ -134,7 +160,7 @@ def split_output(text, config=None, scope=None):
             parts[-1] += tail
         else:
             parts.append(tail)
-    return [chunk for part in parts for chunk in _hard_parts(part, options['platform_max_chars'])]
+    return [chunk for part in parts for chunk in _hard_parts(part, options['platform_max_chars']) if chunk.strip()]
 
 
 def _hard_parts(text, limit):
@@ -157,4 +183,4 @@ def _hard_parts(text, limit):
 
 def split_transport_output(text, config, scope=None):
     """Adapters enforce only their hard cap; conversational pacing belongs to Flow."""
-    return _hard_parts(str(text), transport_limit(config, scope))
+    return [part.strip() for part in _hard_parts(str(text), transport_limit(config, scope)) if part.strip()]

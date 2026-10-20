@@ -6,6 +6,8 @@ No network connection is opened until an enabled, configured bridge is started.
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 from collections import OrderedDict
 from datetime import datetime, timezone
 import re
@@ -13,7 +15,7 @@ import time
 from typing import Any
 
 from .social import ConversationFlow
-from .access import manager_for, private_allowed
+from .access import manager_for, private_allowed, chat_allowed
 from .settings import resolved_identity
 from .output import OutputLimitError, split_transport_output
 from .qq_diagnostics import QQDiagnostics, private_scope
@@ -201,7 +203,7 @@ class OfficialBridge:
             return 'invalid_scope'
         cfg = self._config()
         if parts[1] == "group":
-            return None if parts[2] in _ids(cfg.get('allowed_groups')) else 'group_not_allowed'
+            return None if chat_allowed(self.settings.get(), 'qqofficial', 'group', parts[2]) else 'group_not_allowed'
         if parts[1] != 'private' or (user_id is not None and parts[2] != user_id):
             return 'invalid_scope'
         return None if private_allowed(self.settings.get(), 'qqofficial', parts[2]) else 'private_not_allowed'
@@ -239,6 +241,8 @@ class OfficialBridge:
                 self.store.add_event('admin_pairing', '已处理QQ管理员配对消息，请在管理员页面查看绑定结果', platform='qqofficial', account_id=user_id)
                 self._diagnostics.mark('admin_pairing', scope_id=scope_id, user_id=user_id, stage='command')
             return
+        if self._enabled() and self._rejection(scope_id, user_id) != 'invalid_scope':
+            self.store.discover_scope(scope_id)
         rejection = self._rejection(scope_id, user_id)
         if rejection:
             self._diagnostics.mark(rejection, scope_id=scope_id, user_id=user_id)
@@ -347,6 +351,9 @@ class OfficialBridge:
                          metadata=dict(metadata, failure_feedback=True))
 
     async def _emit(self, scope_id, text, metadata):
+        if metadata.get('sticker'):
+            return await self._send_part(scope_id,'',msg_id=metadata.get('platform_message_id'),
+                msg_seq=(metadata.get('output_part') or {}).get('index',1),metadata=metadata)
         return await self._send(scope_id, text, msg_id=metadata.get('platform_message_id'),
                                 msg_seq=(metadata.get('output_part') or {}).get('index', 1), metadata=metadata)
 
@@ -374,7 +381,8 @@ class OfficialBridge:
         return bool(parts)
 
     async def _send_part(self, scope_id: str, text: str, *, msg_id: str | None = None, msg_seq: int = 1, metadata=None) -> bool:
-        if not self._allowed(scope_id) or not self._connected or self._client is None or not str(text).strip():
+        sticker=(metadata or {}).get('sticker')
+        if not self._allowed(scope_id) or not self._connected or self._client is None or not str(text).strip() and not sticker:
             return False
         scope = self.store.get_scope(scope_id)
         if not scope.get("enabled", True):
@@ -385,6 +393,24 @@ class OfficialBridge:
             kwargs.update(msg_id=msg_id, msg_seq=msg_seq)
         try:
             api = self._client.api
+            if sticker:
+                from PIL import Image
+                from botpy.http import Route
+                guard=(metadata or {}).get('sticker_current')
+                if callable(guard) and not guard(): return False
+                _,raw=self.chat.stickers.payload(sticker['id'],scope_id,sticker['version'])
+                # Official group/C2C media requires upload then msg_type=7.
+                # botpy 1.2.1 lacks a file_data wrapper, so use its signed HTTP client.
+                with Image.open(io.BytesIO(raw)) as image:
+                    image.thumbnail((1024,1024))
+                    output=io.BytesIO();image.convert('RGBA').save(output,format='PNG')
+                if output.tell()>2*1024*1024: return False
+                route=Route('POST','/v2/groups/{group_openid}/files',group_openid=target) if kind=='group' else Route('POST','/v2/users/{openid}/files',openid=target)
+                upload=await asyncio.wait_for(api._http.request(route,json={'file_type':1,'file_data':base64.b64encode(output.getvalue()).decode(),'srv_send_msg':False}),timeout=20)
+                if not isinstance(upload,dict) or not upload.get('file_info'): return False
+                self.chat.stickers.payload(sticker['id'],scope_id,sticker['version'])
+                if not self._allowed(scope_id) or callable(guard) and not guard(): return False
+                kwargs.update(msg_type=7,content=' ',media={'file_info':upload['file_info']})
             operation = api.post_group_message(group_openid=target, **kwargs) if kind == "group" else api.post_c2c_message(openid=target, **kwargs)
             result = await asyncio.wait_for(operation, timeout=20)
             confirmed = isinstance(result, dict) and bool(result.get("id")) and result.get("code", 0) in (None, 0)
@@ -408,6 +434,6 @@ class OfficialBridge:
         except Exception as exc:
             self._diagnostics.mark('send_failed', scope_id=scope_id, stage='failed')
             self._last_error = f"官方发送未确认（{type(exc).__name__}），请检查权限或发送额度"
-            self.store.add_event("qq_official_delivery", self._last_error, scope_id=scope_id,
+            self.store.add_exception("qq_official_delivery", self._last_error, exc, scope_id=scope_id,
                                  output_part=(metadata or {}).get('output_part'))
             return False

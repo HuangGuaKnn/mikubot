@@ -4,7 +4,9 @@ import re
 
 FIELDS = {'persona_id', 'model_id', 'activity', 'trigger_at', 'trigger_reply',
           'trigger_name', 'plan_enabled', 'proactive_reply', 'always_reply',
-          'allow_tools', 'allow_mcp', 'use_persona_knowledge'}
+          'allow_tools', 'allow_mcp', 'use_persona_knowledge', 'private_always_reply',
+          'auto_memory', 'dictionary_learn', 'dictionary_use', 'dictionary_understand',
+          'expression_learn', 'expression_use', 'context_compress'}
 DEFAULT_PROFILES = {'default_id': 'default', 'items': [
     {'id': 'default', 'name': '默认配置', 'values': {'persona_id': 'default', 'model_id': ''}}]}
 
@@ -30,7 +32,7 @@ def validate_profiles(value):
             raise ValueError('配置包含不支持的设置')
         for field, data in values.items():
             if field in ('persona_id', 'model_id'):
-                if not isinstance(data, str) or len(data) > 100 or (field == 'persona_id' and not data):
+                if not isinstance(data, str) or len(data) > 100:
                     raise ValueError('人格或模型ID格式错误')
             elif field == 'activity':
                 if data not in ('quiet', 'balanced', 'active'): raise ValueError('回应方式无效')
@@ -47,7 +49,13 @@ def resolve_scope(scope, settings):
     profile = next((p for p in config['items'] if p['id'] == (profile_id or config['default_id'])), None)
     if profile is None: raise ValueError('会话绑定的机器人配置不存在')
     overrides = scope.get('profile_overrides', [])
-    return dict(scope, **{k: v for k, v in profile['values'].items() if k not in overrides},
+    values = {k: v for k, v in profile['values'].items() if k not in overrides}
+    if ':private:' in scope['id'] or scope['id'].startswith('web:'):
+        if 'always_reply' not in overrides:
+            values['always_reply'] = profile['values'].get('private_always_reply', True)
+        if values.get('always_reply') and 'plan_enabled' not in overrides and 'plan_enabled' not in values:
+            values['plan_enabled'] = False
+    return dict(scope, **values,
                 profile_name=profile['name'], effective_profile_id=profile['id'], profile_legacy=False)
 
 

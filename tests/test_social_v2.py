@@ -21,7 +21,7 @@ def anyio_backend():
 class Settings:
     def __init__(self):
         self.config = deepcopy(DEFAULTS)
-        self.config['onebot'].update(enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
+        self.config['onebot'].update(chat_policy="whitelist", enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
         self.config['model'].update(base_url='https://mock.invalid/v1', model='test')
 
     def get(self):
@@ -285,7 +285,7 @@ async def test_model_cannot_cite_a_foreign_scope_or_fabricated_source(setup):
 async def test_official_nonmention_events_observed_only_with_platform_allowlist(setup):
     store, settings, provider, chat, _ = setup
     settings.config['onebot']['adapter'] = 'official'
-    settings.config['qq_official'].update(enabled=True, app_id='app', allowed_groups=['gid'], allowed_users=['uid'])
+    settings.config['qq_official'].update(chat_policy="whitelist", enabled=True, app_id='app', allowed_groups=['gid'], allowed_users=['uid'])
     store.upsert_scope({'id': 'qqofficial:group:gid', 'merge_window_ms': 0, 'plan_enabled': False})
     bridge = OfficialBridge(store, settings, chat)
     bridge._running = bridge._connected = True

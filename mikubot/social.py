@@ -157,12 +157,12 @@ class SocialEngine:
             return False
         if platform == 'qq':
             qq = cfg.get('onebot', {})
-            from .access import private_allowed
-            return bool(qq.get('enabled')) and qq.get('adapter', 'napcat') != 'official' and (target in map(str, qq.get('allowed_groups', [])) if kind == 'group' else private_allowed(cfg, 'onebot', target))
+            from .access import private_allowed, chat_allowed
+            return bool(qq.get('enabled')) and qq.get('adapter', 'napcat') != 'official' and (chat_allowed(cfg, 'onebot', 'group', target) if kind == 'group' else private_allowed(cfg, 'onebot', target))
         if platform == 'qqofficial':
             qq = cfg.get('qq_official', {})
-            from .access import private_allowed
-            return cfg.get('onebot', {}).get('adapter') == 'official' and bool(qq.get('enabled')) and (target in map(str, qq.get('allowed_groups', [])) if kind == 'group' else private_allowed(cfg, 'qqofficial', target))
+            from .access import private_allowed, chat_allowed
+            return cfg.get('onebot', {}).get('adapter') == 'official' and bool(qq.get('enabled')) and (chat_allowed(cfg, 'qqofficial', 'group', target) if kind == 'group' else private_allowed(cfg, 'qqofficial', target))
         return False
 
     def observe(self, scope_id, message):
@@ -517,9 +517,7 @@ class SocialEngine:
                 if item.get('entry_type', 'jargon') == entry_type]
 
     def _blocked_sources(self, scope_id):
-        records = (self.store.list_memories(scope_id=scope_id) + self.store.list_memories(scope_id=scope_id, status='deleted')
-                   + self.store.list_jargon(scope_id=scope_id) + self.store.list_jargon(scope_id=scope_id, status='deleted'))
-        return {source for item in records for source in item.get('blocked_source_ids', [])}
+        return self.store.blocked_memory_sources(scope_id)
 
     def _learning_current(self, scope_id, source_ids, *, expressions=False):
         if not self._allowed(scope_id, learning=not expressions, expressions=expressions):
@@ -759,10 +757,15 @@ class ConversationFlow:
         self._scope_jobs = defaultdict(int)
         self._output_locks = defaultdict(asyncio.Lock)
         self._failure_at = {}
+        self._planner_batches = {}
 
     async def handle(self, scope_id, user_id, text, images, metadata, *, direct=False, reply_to_bot=False, wait=True):
         observed = self.chat.observe(scope_id, user_id, text, images=images, metadata=metadata)
         message = await observed if inspect.isawaitable(observed) else observed
+        return await self._handle_observed(scope_id,user_id,text,images,metadata,message,
+                                           direct=direct,reply_to_bot=reply_to_bot,wait=wait)
+
+    async def _handle_observed(self, scope_id, user_id, text, images, metadata, message, *, direct=False, reply_to_bot=False, wait=True, batched=False):
         scope = self.store.get_scope(scope_id)
         social = getattr(self.chat, 'social', None) or self._fallback
         key = (scope_id, str(user_id))
@@ -771,6 +774,19 @@ class ConversationFlow:
         explicit = bool((metadata.get('at_bot', direct) and identity['trigger_at']) or (reply_to_bot and identity['trigger_reply'])
                         or (metadata.get('reply_to_bot') and identity['trigger_reply'])
                         or (_named(scope, text, self.settings.get()) and identity['trigger_name']) or ':private:' in scope_id)
+        planner_cfg=self.settings.get().get('planner',{})
+        if explicit and scope_id in self._planner_batches:
+            discarded=self._planner_batches.pop(scope_id)
+            discarded['discarded']=True
+            discarded['ready'].set()
+        if (not batched and pending is None and ':group:' in scope_id and not explicit and not _interrupt(text)
+                and not (key in social._open_requests and _replacement(text))
+                and identity['plan_enabled'] and identity['proactive_reply'] and not _quiet(scope)
+                and _value(scope,'activity','balanced')!='quiet' and planner_cfg.get('group_batch_ms',1500)>0):
+            if time.monotonic()-social._last_gate.get(scope_id,-float('inf')) < social._planner_options(scope)['min_interval_ms']/1000:
+                social._decision(scope_id,str(user_id),message,'skip','Planner 主动判断间隔内，本轮仅观察',explicit=False)
+                return {'accepted':False,'code':'cooldown'}
+            return await self._queue_planner(scope_id,user_id,text,images,metadata,message,wait=wait)
         replacing = pending is not None and pending['entries'] and (_replacement(text) or (explicit and not _incomplete(pending['entries'][-1]['text'])))
         explicit = explicit or (key in social._open_requests and _replacement(text))
         extending = (pending is not None and not replacing and len(pending['entries']) < 8 and not _interrupt(text)
@@ -821,6 +837,44 @@ class ConversationFlow:
         if wait:
             await asyncio.shield(batch['future'])
         return {'accepted': True, 'code': 'accepted'}
+
+    async def _queue_planner(self,scope_id,user_id,text,images,metadata,message,*,wait):
+        batch=self._planner_batches.get(scope_id)
+        if batch is None:
+            if len(self._planner_batches)>=128: return {'accepted':False,'code':'ingress_busy'}
+            batch={'entries':[],'ready':asyncio.Event(),'future':asyncio.get_running_loop().create_future(),'discarded':False}
+            self._planner_batches[scope_id]=batch
+            task=asyncio.create_task(self._flush_planner(scope_id,batch))
+            self._jobs.add(task);task.add_done_callback(self._jobs.discard)
+        batch['entries'].append((user_id,text,images,dict(metadata),message))
+        batch['entries']=batch['entries'][-20:]
+        if len(batch['entries'])>=self.settings.get().get('planner',{}).get('group_batch_messages',4): batch['ready'].set()
+        if wait: return await asyncio.shield(batch['future'])
+        return {'accepted':True,'code':'planner_buffered'}
+
+    async def _flush_planner(self,scope_id,batch):
+        result={'accepted':False,'code':'planner_skip'}
+        try:
+            delay=self.settings.get().get('planner',{}).get('group_batch_ms',1500)/1000
+            try: await asyncio.wait_for(batch['ready'].wait(),timeout=delay)
+            except asyncio.TimeoutError: pass
+            if self._planner_batches.get(scope_id) is batch: self._planner_batches.pop(scope_id,None)
+            if batch['discarded'] or not batch['entries']: return
+            user_id,text,images,metadata,message=batch['entries'][-1]
+            if not self.allowed(scope_id,user_id): return
+            try: current=self.store.get_message(message['id'])
+            except KeyError: return
+            from .db import message_fingerprint
+            if message_fingerprint(current)!=message_fingerprint(message): return
+            # All raw observations remain in history. Only the latest sender is
+            # the requester; commands from different members are never merged.
+            result=await self._handle_observed(scope_id,user_id,text,images,metadata,message,wait=True,batched=True)
+        except asyncio.CancelledError: raise
+        except Exception as exc:
+            self.store.add_exception('planner_batch_error','群聊集中判断未完成',exc,scope_id=scope_id)
+        finally:
+            if self._planner_batches.get(scope_id) is batch: self._planner_batches.pop(scope_id,None)
+            if not batch['future'].done(): batch['future'].set_result(result)
 
     def _may_answer(self, scope_id, user_id, batch):
         scope = self.store.get_scope(scope_id)
@@ -921,6 +975,7 @@ class ConversationFlow:
                                      scope_id=scope_id, confirmed_parts=confirmed, stopped_part=index, total_parts=len(parts))
                 return False
             confirmed += 1
+            batch['confirmed_parts']=confirmed
             batch['output_started'] = True
             if confirmed == 1:
                 (getattr(self.chat, 'social', None) or self._fallback)._last_reply[scope_id] = time.monotonic()
@@ -965,6 +1020,20 @@ class ConversationFlow:
                     delivered = await self._emit_chunks(scope_id, user_id, result['reply'], metadata, batch)
                     if delivered:
                         (getattr(self.chat, 'social', None) or self._fallback).note_reply(scope_id, user_id, ids)
+                        library=getattr(self.chat,'stickers',None)
+                        if library is not None:
+                            try:
+                                sticker=await library.choose(scope_id,user_id,text,result['reply'],lambda:self._may_answer(scope_id,user_id,batch))
+                                if sticker:
+                                    async with self._output_locks[scope_id]:
+                                        if self._may_answer(scope_id,user_id,batch):
+                                            sent=await self.emit(scope_id,'',dict(metadata,sticker=sticker,assistant_message_id=batch.get('logical_message_id'),
+                                                sticker_current=lambda:self._may_answer(scope_id,user_id,batch),
+                                                output_part={'index':batch.get('confirmed_parts',1)+1,'total':batch.get('confirmed_parts',1)+1}))
+                                            if sent: library.note_sent(sticker['id'],scope_id,sticker['version'])
+                            except asyncio.CancelledError: raise
+                            except Exception as exc:
+                                self.store.add_exception('sticker_send_error','表情包未发送，文字回复不受影响',exc,scope_id=scope_id)
                     else:
                         self.store.add_event('qq_delivery', '群聊回复未确认送达', scope_id=scope_id, message_id=result.get('message_id'))
                 elif not result.get('reply') and self._may_answer(scope_id, user_id, batch):
@@ -1001,5 +1070,8 @@ class ConversationFlow:
             if not batch['future'].done():
                 batch['future'].set_result(None)
         self._batches.clear()
+        for batch in self._planner_batches.values():
+            if not batch['future'].done(): batch['future'].set_result({'accepted':False,'code':'planner_skip'})
+        self._planner_batches.clear()
         self._scope_jobs.clear()
         self._jobs.clear()

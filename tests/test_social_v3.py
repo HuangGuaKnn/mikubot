@@ -20,7 +20,7 @@ def anyio_backend():
 class Settings:
     def __init__(self):
         self.config = deepcopy(DEFAULTS)
-        self.config['onebot'].update(enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
+        self.config['onebot'].update(chat_policy="whitelist", enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
         self.config['model'].update(base_url='https://fake.invalid/v1', model='fake')
 
     def get(self):
@@ -225,7 +225,8 @@ async def test_same_member_correction_interrupts_inflight_request_without_anothe
 
 @pytest.mark.anyio
 async def test_human_answer_during_merge_prevents_unsolicited_model_reply(setup):
-    store, _, provider, chat, bridge = setup
+    store, settings, provider, chat, bridge = setup
+    settings.config['planner']['group_batch_ms'] = 0  # Exercise reply merging independently of the earlier Planner buffer.
     store.upsert_scope({'id': 'qq:group:202', 'activity': 'active', 'merge_window_ms': 30, 'plan_enabled': True})
     first = asyncio.create_task(bridge.handle_event(event(1, '有人知道电脑怎么修吗？')))
     await asyncio.sleep(.002)

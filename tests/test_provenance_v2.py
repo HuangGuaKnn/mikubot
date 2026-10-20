@@ -45,7 +45,7 @@ async def runtime(tmp_path):
     store, settings, provider = Store(tmp_path / 'data'), Settings(tmp_path / 'data'), FakeProvider()
     config = settings.get()
     # In-memory overrides avoid persisting any provider or connector credentials.
-    config['onebot'].update(enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
+    config['onebot'].update(chat_policy="whitelist", enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
     settings.get = lambda: deepcopy(config)
     store.upsert_scope({'id': 'web:default', 'auto_memory': False})
     chat = ChatService(store, settings, provider)

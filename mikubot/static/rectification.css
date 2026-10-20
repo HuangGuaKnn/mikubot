@@ -1,0 +1,33 @@
+/* Keep actions reachable with window resizing, browser zoom and high DPI. */
+.sticker-preview{display:block;width:100%;height:150px;object-fit:contain;background:var(--bg,#f5f8f8);border-radius:8px;margin-bottom:12px}
+.modal>#toast-region{position:static;inset:auto;flex:0 0 auto;width:auto;max-width:none;max-height:25dvh;overflow-y:auto;padding:10px 16px;margin:0;background:var(--surface,#fff);border-bottom:1px solid var(--line);z-index:auto;box-sizing:border-box}
+.modal>#toast-region:empty{display:none}
+.modal>#toast-region .toast{max-width:100%;animation:none}
+.modal[open]{display:flex;flex-direction:column;max-height:calc(100dvh - 24px);overflow:hidden;margin:auto;box-sizing:border-box}
+#modal-content{display:flex;flex-direction:column;min-height:0;max-height:inherit;width:100%;overflow:hidden}
+#modal-content>form{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.modal-head,.wizard-banner,.modal-footer{flex:none}
+.modal-body,.wizard-body{min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.modal-footer{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;border-top:1px solid var(--line);background:var(--surface,#f5f8f8);padding:12px 20px}
+.wizard-banner{padding:22px 28px}.wizard-banner h2{font-size:25px;margin:8px 0}.wizard-steps{margin-top:14px}
+.header-update{white-space:nowrap;border:1px solid var(--line);gap:6px}
+.bot-config-tabs{display:flex;gap:6px;flex-wrap:wrap;position:sticky;top:0;z-index:2;background:var(--bg,#f5f8f8);padding:10px 0;margin-bottom:20px}
+.bot-config-body{max-width:1100px}.bot-config-body .panel{margin-bottom:18px}
+.chat-directory{display:grid;gap:10px}.chat-directory-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:16px 20px;background:var(--surface,#fff)}
+.chat-directory-name{flex:1;min-width:150px}.chat-directory-name h3{font-size:15px;margin:0 0 5px}.chat-directory-name small{opacity:.65;overflow-wrap:anywhere}
+.admission-policy{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:10px}
+#onebot-fields:has([name=onebot_chat_policy] option[value=blacklist]:checked) .field:has([name=owner_ids]),
+#onebot-fields:has([name=onebot_chat_policy] option[value=blacklist]:checked) .field:has([name=allowed_groups]),
+#official-fields:has([name=official_chat_policy] option[value=blacklist]:checked) .field:has([name=official_allowed_groups]),
+#official-fields:has([name=official_chat_policy] option[value=blacklist]:checked) .field:has([name=allowed_users]),
+[data-form=quick-start]:has([name=chat_policy] option[value=blacklist]:checked) .field:has([name=owner_ids]),
+[data-form=quick-start]:has([name=chat_policy] option[value=blacklist]:checked) .field:has([name=allowed_groups]),
+[data-form=quick-start]:has([name=chat_policy] option[value=blacklist]:checked) .field:has([name=official_groups]),
+[data-form=quick-start]:has([name=chat_policy] option[value=blacklist]:checked) .field:has([name=official_users]){display:none}
+.admission-policy:has(option[value=whitelist]:checked) .blocked-list{display:none}
+.settings-layout:not(:has(.settings-aside)){grid-template-columns:minmax(0,1fr)}
+.breadcrumb>.workspace-prefix{margin:0}
+@media(max-width:600px){.breadcrumb>.workspace-prefix,.topbar-right .logout-button,.scope-picker>span{display:none}.topbar-left,.topbar-right{min-width:0}.topbar-right{gap:6px}.scope-picker select{max-width:90px}.header-update>span:last-child{display:inline;font-size:0}.header-update>span:last-child:after{content:"更新";font-size:10px}.topbar{padding-left:12px;padding-right:12px}.topbar-left{gap:6px}.breadcrumb{white-space:nowrap}}
+@media(max-width:360px){.header-update>span:last-child{display:none}.scope-picker select{max-width:80px}}
+@media(max-height:650px){.wizard-banner{padding:12px 22px}.wizard-banner h2{font-size:21px}.wizard-banner>p{display:none}.wizard-steps{margin-top:8px}.wizard-body{padding:16px 22px}.modal-head{padding:14px 21px}.modal-footer{padding:10px 16px}.wizard-body .quick-connector-guide{margin-top:12px}}
+@media(max-width:760px){.header-update>span:last-child{display:none}.topbar-right .owner-avatar,.topbar-right .topbar-divider{display:none}.scope-picker select{max-width:110px}.chat-directory-row{gap:10px;padding:14px}.chat-directory-row .record-actions{width:100%;flex-wrap:wrap}.bot-config-tabs{position:static;gap:3px}.bot-config-tabs .btn{padding:8px 10px}.modal-footer .btn{min-height:36px}}

@@ -73,7 +73,7 @@ def test_scope_output_override_inherits_unset_global_fields():
 class Settings:
     def __init__(self):
         self.config = deepcopy(DEFAULTS)
-        self.config['onebot'].update(enabled=True, owner_ids=['101'], allowed_groups=['202'])
+        self.config['onebot'].update(chat_policy="whitelist", enabled=True, owner_ids=['101'], allowed_groups=['202'])
         self.config['output'].update(target_chars=30, max_chars=40, interval_ms=0)
 
     def get(self):
@@ -153,7 +153,7 @@ async def test_all_confirmed_parts_are_identifiable_as_bot_replies(bridge_setup)
 async def test_official_parts_use_unique_passive_sequence_and_store_receipts(tmp_path):
     store, settings = Store(tmp_path), Settings()
     settings.config['onebot']['adapter'] = 'official'
-    settings.config['qq_official'].update(enabled=True, allowed_groups=['gid'])
+    settings.config['qq_official'].update(chat_policy="whitelist", enabled=True, allowed_groups=['gid'])
     store.upsert_scope({'id': 'qqofficial:group:gid', 'plan_enabled': False})
     chat = Chat(store, settings)
     bridge = OfficialBridge(store, settings, chat)

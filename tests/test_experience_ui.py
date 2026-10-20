@@ -34,3 +34,27 @@ def test_github_update_selection_and_install_boundaries():
     if not node: pytest.skip('Optional frontend regression requires Node.js')
     result = subprocess.run([node,str(Path(__file__).with_name('frontend_updates.cjs'))],capture_output=True,text=True,encoding='utf-8',timeout=20)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_bot_configuration_navigation_inheritance_and_admission():
+    node = shutil.which('node')
+    if not node: pytest.skip('Optional frontend regression requires Node.js')
+    result = subprocess.run([node, str(Path(__file__).with_name('frontend_bot_config.cjs'))],
+                            capture_output=True, text=True, encoding='utf-8', timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_modal_notifications_and_bounded_memory_page_interactions():
+    node = shutil.which('node')
+    if not node: pytest.skip('Optional frontend regression requires Node.js')
+    result = subprocess.run([node, str(Path(__file__).with_name('frontend_memory_scale.cjs'))],
+                            capture_output=True, text=True, encoding='utf-8', timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_sticker_configuration_library_and_editing_interactions():
+    node = shutil.which('node')
+    if not node: pytest.skip('Optional frontend regression requires Node.js')
+    result = subprocess.run([node, str(Path(__file__).with_name('frontend_stickers.cjs'))],
+                            capture_output=True, text=True, encoding='utf-8', timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr

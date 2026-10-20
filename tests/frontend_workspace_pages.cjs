@@ -48,7 +48,7 @@ async function main(){
   const qq=ui.qqIngress({message_events_received:0,heartbeat_events_received:3,diagnostic:"只有心跳，尚未收到消息",last_message_result:{reason:"<img>"}});assert.match(qq,/只有心跳/);assert.match(qq,/心跳 3/);
   assert.ok(!ui.qqIngress({message_events_received:1,diagnostic:"<script>bad</script>"}).includes("<script>"));
   const rejected=ui.qqIngress({message_events_received:1,last_message_result:{code:"private_not_allowed",stage:"blocked",user_id:"123456",scope_id:"qq:private:123456"}});
-  assert.match(rejected,/最近发送人：123456/);assert.match(rejected,/允许名单/);assert.match(rejected,/刷新接收状态/);
+  assert.match(rejected,/最近发送人：123456/);assert.match(rejected,/黑名单/);assert.match(rejected,/白名单/);assert.match(rejected,/刷新接收状态/);
   assert.match(ui.qqIngress({message_events_received:1,last_message_result:{code:"sent",stage:"sent"}}),/平台已确认送达/);
 
   let completed=false;await ui.startQuickModel(async()=>{completed=true;});

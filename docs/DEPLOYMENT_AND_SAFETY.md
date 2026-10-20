@@ -1,6 +1,6 @@
 # 本地改进：部署、隔离与验收
 
-本文描述0.1.1。正式桌面目标为Windows；Linux核心的Python3.11–3.13回归、Docker镜像构建和隔离探针已在[GitHub Actions](https://github.com/iownmmiku/mikubot/actions/runs/39226282587)通过。本机Windows家庭版仍未运行Docker，真实QQ、长期服务器部署与公网证书需按目标环境验收。
+本文描述0.1.2。正式桌面目标为Windows；Linux核心的Python3.11–3.13回归、Docker镜像构建和隔离探针此前0.1.1已在[GitHub Actions](https://github.com/iownmmiku/mikubot/actions/runs/39226282587)通过。本机Windows家庭版仍未运行Docker，真实QQ、长期服务器部署与公网证书需按目标环境验收。
 
 ## Python 与包入口
 

@@ -20,7 +20,7 @@ class ProviderError(ValueError):
         self.retryable = retryable
 
 
-BACKGROUND_PURPOSES = {'knowledge', 'memory_extract', 'memory', 'jargon_learning', 'expression_learning', 'context_digest', 'distillation'}
+BACKGROUND_PURPOSES = {'knowledge', 'memory_extract', 'memory', 'jargon_learning', 'expression_learning', 'context_digest', 'distillation', 'sticker_vision', 'sticker_select'}
 
 
 class _PriorityGate:

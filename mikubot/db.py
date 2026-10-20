@@ -267,7 +267,7 @@ class Store:
                     if scope.get("persona_id") in removed:
                         self._write("scopes", {**scope, "persona_id": "default"}, ())
                 self.add_event(marker, "默认人格模板已迁移；保留自建及改写人格", removed_personas=removed)
-            self._conn.execute("INSERT OR IGNORE INTO personas(id,data) VALUES (?,?)", (default["id"], _json(default)))
+                self._conn.execute("INSERT OR IGNORE INTO personas(id,data) VALUES (?,?)", (default["id"], _json(default)))
             if self._conn.execute("SELECT 1 FROM scopes WHERE id=?", ("web:default",)).fetchone() is None:
                 self.upsert_scope({"id": "web:default"})
 
@@ -329,6 +329,37 @@ class Store:
             except KeyError:
                 return self.upsert_scope({"id": scope_id})
 
+    def discover_scope(self, scope_id: str, name: str = '') -> dict:
+        """Collect chat metadata without persisting rejected message content."""
+        with self._lock:
+            try:
+                self._get('scopes', scope_id)
+            except KeyError:
+                binding = {'profile_id': '', 'profile_overrides': []} if getattr(self, 'scope_resolver', None) else {}
+                display = str(name).strip()[:100]
+                if any(ord(char) < 32 for char in display):
+                    display = ''
+                return self.upsert_scope({'id': scope_id, 'discovered_at': utc_now(),
+                                          **({'name': display} if display else {}), **binding})
+            return self.get_scope(scope_id)
+
+    def default_persona_id(self) -> str:
+        personas = self.list_personas()
+        return 'default' if any(p['id'] == 'default' for p in personas) else (personas[0]['id'] if personas else '')
+
+    def inherit_scope(self, scope_id: str) -> dict:
+        from .profiles import FIELDS
+        with self._lock, self._conn:
+            record = self._get('scopes', scope_id)
+            for key in list(record):
+                if key in FIELDS or key in ('bot_name', 'bot_aliases', 'output', 'quiet_start', 'quiet_end',
+                                           'cooldown_seconds', 'followup_seconds', 'merge_window_ms',
+                                           'daily_tokens', 'semantic_gate') or key.startswith(('output_', 'planner_')):
+                    record.pop(key)
+            record.update(profile_id='', profile_overrides=[], settings={})
+            self._write('scopes', record, ())
+            return self.upsert_scope({'id': scope_id})
+
     def upsert_scope(self, data: dict) -> dict:
         incoming = _data(data)
         scope_id = _text(incoming.get("id", incoming.get("scope_id", "web:default")), "id")
@@ -355,7 +386,7 @@ class Store:
                     incoming['profile_overrides'] = sorted(set(previous.get('profile_overrides', [])) | (set(incoming) & FIELDS))
                 if 'profile_overrides' in incoming and (not isinstance(incoming['profile_overrides'], list) or any(k not in FIELDS for k in incoming['profile_overrides'])):
                     raise ValueError('会话覆盖字段无效')
-            record = {"id": scope_id, "name": default_name, "enabled": True, "persona_id": "default",
+            record = {"id": scope_id, "name": default_name, "enabled": True, "persona_id": self.default_persona_id(),
                       "activity": "balanced", "dictionary_understand": True, "dictionary_use": False,
                       "auto_memory": True, "quiet_start": "", "quiet_end": "", "allow_tools": True,
                       "plan_enabled": None, "trigger_at": None, "trigger_reply": None, "trigger_name": None, "proactive_reply": None,
@@ -376,7 +407,7 @@ class Store:
             record["memory_space"] = _text(record["memory_space"], "memory_space", required=False)
             if len(record["memory_space"]) > 80 or any(ord(char) < 32 for char in record["memory_space"]):
                 raise ValueError("memory_space 必须为最多 80 字的共享空间名称")
-            self.get_persona(_text(record["persona_id"], "persona_id"))
+            self.get_persona(_text(record["persona_id"], "persona_id", required=False))
             _choice(record["activity"], {"quiet", "balanced", "active"}, "activity")
             for field in ("enabled", "dictionary_understand", "dictionary_use", "auto_memory", "allow_tools", "always_reply", "expression_learn", "expression_use", "context_compress", "use_persona_knowledge"):
                 _boolean(record[field], field)
@@ -424,6 +455,9 @@ class Store:
         return self._list("personas")
 
     def get_persona(self, id: str) -> dict:
+        if id == '':
+            return {'id': '', 'name': '未使用人格', 'description': '', 'color': '#39c5bb',
+                    'system_prompt': '你是 mikubot。自然、清楚地回应，不编造记忆或已经完成的事情。'}
         return self._get("personas", id)
 
     def save_persona(self, data: dict) -> dict:
@@ -443,13 +477,13 @@ class Store:
             return self._write("personas", record, ())
 
     def delete_persona(self, id: str) -> dict:
-        if id == "default":
-            raise ValueError("默认角色不能删除")
         with self._lock, self._conn:
             record = self.get_persona(id)
+            remaining = [p for p in self.list_personas() if p['id'] != id]
+            replacement = next((p['id'] for p in remaining if p['id'] == 'default'), remaining[0]['id'] if remaining else '')
             for scope in self._list('scopes'):
                 if scope.get("persona_id") == id:
-                    scope["persona_id"] = "default"
+                    scope["persona_id"] = replacement
                     self._write("scopes", scope, ())
             self._conn.execute("DELETE FROM personas WHERE id=?", (id,))
             return record
@@ -577,6 +611,68 @@ class Store:
     def get_memory(self, id: str) -> dict:
         return _memory_view(self._get("memories", id))
 
+    def blocked_memory_sources(self, scope_id: str) -> set[str]:
+        """Project tombstones in SQLite without decoding entire memory bodies."""
+        with self._lock:
+            rows = self._conn.execute("""SELECT j.value FROM memories m,
+                json_each(m.data,'$.blocked_source_ids') j WHERE m.scope_id=? AND j.type='text'
+                UNION SELECT j.value FROM jargon m,
+                json_each(m.data,'$.blocked_source_ids') j WHERE m.scope_id=? AND j.type='text'""",
+                (scope_id, scope_id)).fetchall()
+            return {row[0] for row in rows}
+
+    def memory_property_records(self, scope_id, property_name, status=None, *, include_shared=False):
+        if include_shared:
+            scope = self.get_scope(scope_id)
+            space = scope.get('memory_space')
+            origins = {scope_id} | {item['id'] for item in self.list_scopes()
+                                   if space and item.get('memory_space') == space and item.get('enabled', True)}
+        else:
+            origins = None
+        clauses, params = self._filters(scope_id, status, MEMORY_STATUSES)
+        if origins is not None:
+            clauses, params = self._filters(None, status, MEMORY_STATUSES)
+            clauses.append('scope_id IN (' + ','.join('?' for _ in origins) + ')')
+            params.extend(sorted(origins))
+        if status is None: clauses.append("status!='deleted'")
+        clauses.append("json_extract(data,'$.property')=?")
+        params.append(property_name)
+        return [_memory_view(record) for record in self._list('memories', clauses, params)]
+
+    def memory_review_counts(self):
+        with self._lock:
+            counts = dict(self._conn.execute('SELECT status,COUNT(*) FROM memories GROUP BY status').fetchall())
+            digests = self._conn.execute("SELECT COUNT(*) FROM memories WHERE status='active' AND json_extract(data,'$.property')='conversation_digest'").fetchone()[0]
+            jargon = self._conn.execute("""SELECT
+                SUM(CASE WHEN json_extract(data,'$.entry_type')='expression' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN COALESCE(json_extract(data,'$.entry_type'),'jargon')!='expression' THEN 1 ELSE 0 END)
+                FROM jargon WHERE status='pending'""").fetchone()
+        return {'active': counts.get('active', 0), 'pending': counts.get('pending', 0), 'digests': digests,
+                'expression_pending': jargon[0] or 0, 'jargon_pending': jargon[1] or 0}
+
+    def memory_page(self, scope_id=None, q='', status=None, *, limit=50, offset=0):
+        limit = _limit(limit, 200)
+        if type(offset) is not int or offset < 0:
+            raise ValueError('offset 须为非负整数')
+        q = _text(q, 'q', required=False)
+        if len(q) > 1000: raise ValueError('搜索文字不超过1000字')
+        clauses, params = self._filters(scope_id, status, MEMORY_STATUSES)
+        if status is None: clauses.append("status!='deleted'")
+        with self._lock:
+            if q:
+                # Preserve legacy casefold/property normalization semantics.
+                self._conn.create_function('memory_query', 2, lambda raw, query: bool(self._search_text(
+                    [_memory_view(json.loads(raw))], query, ('content', 'subject', 'kind', 'property'))))
+                clauses.append('memory_query(data,?)')
+                params.append(q)
+            where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
+            total = self._conn.execute('SELECT COUNT(*) FROM memories' + where, params).fetchone()[0]
+            rows = self._conn.execute('SELECT data FROM memories' + where + ' ORDER BY updated_at DESC,rowid DESC LIMIT ? OFFSET ?',
+                                      [*params, limit, offset]).fetchall()
+        items = [_memory_view(json.loads(row[0])) for row in rows]
+        return {'items': items, 'total': total, 'offset': offset, 'limit': limit,
+                'has_more': offset + len(items) < total, 'next_offset': offset + len(items)}
+
     def list_memory_versions(self, id: str) -> list[dict]:
         with self._lock:
             self.get_memory(id)
@@ -630,11 +726,15 @@ class Store:
             return []
         scopes = {record["id"]: record for record in self.list_scopes()}
         space = scope.get("memory_space", "")
+        origin_permissions = {}
 
         def in_boundary(record):
             origin = record.get("scope_id")
-            if scope_allowed is not None and not scope_allowed(origin):
-                return False
+            if scope_allowed is not None:
+                if origin not in origin_permissions:
+                    origin_permissions[origin] = bool(scope_allowed(origin))
+                if not origin_permissions[origin]:
+                    return False
             if origin == scope_id:
                 return True
             source = scopes.get(origin, {})
@@ -674,14 +774,11 @@ class Store:
         relation_origins = {record["scope_id"] for record in records if record.get("property") == "memory_relation"}
         relation_blocked = {}
         for origin in relation_origins:
-            relation_blocked[origin] = {source for item in self._list("memories", ["scope_id=?"], [origin])
-                                        + self._list("jargon", ["scope_id=?"], [origin])
-                                        for source in item.get("blocked_source_ids", [])}
+            relation_blocked[origin] = self.blocked_memory_sources(origin)
         blocked = set()
         jargon = {}
         if digests:
-            for item in self._list("memories", ["scope_id=?"], [scope_id]) + self._list("jargon", ["scope_id=?"], [scope_id]):
-                blocked.update(item.get("blocked_source_ids", []))
+            blocked = self.blocked_memory_sources(scope_id)
             jargon = {item["id"]: item for item in self._list("jargon", ["scope_id=?"], [scope_id])}
 
         def allowed(record: dict, visiting: set[str]) -> bool:
@@ -786,10 +883,17 @@ class Store:
                 offset += len(rows)
             return result[:limit]
 
-    def visible_memories(self, scope_id: str, user_id: str, *, scope_allowed=None) -> list[dict]:
+    def visible_memories(self, scope_id: str, user_id: str, *, scope_allowed=None, record_ids=None) -> list[dict]:
         """Authoritative current projection shared by lexical/semantic readers."""
         with self._lock:
-            return self._allowed_memories(scope_id, user_id, scope_allowed=scope_allowed)
+            roots = None
+            if record_ids is not None:
+                keys = list(dict.fromkeys(record_ids))
+                roots = []
+                for start in range(0, len(keys), 400):
+                    part = keys[start:start + 400]
+                    roots.extend(self._list('memories', ['id IN (' + ','.join('?' for _ in part) + ')'], part))
+            return self._allowed_memories(scope_id, user_id, scope_allowed=scope_allowed, roots=roots)
 
     def memory_accessible(self, scope_id: str, user_id: str, record_id: str, version: int | None = None, *, scope_allowed=None) -> bool:
         """Recheck consent, membership, privacy and dependency closure now."""

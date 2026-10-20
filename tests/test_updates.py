@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from auth_helpers import FIXTURE_PASSWORD, password_login
+from mikubot import __version__
 from mikubot import updates, installer
 from mikubot.api import create_app
 
@@ -160,7 +161,7 @@ def test_authenticated_update_api_and_remote_install_rejection(tmp_path,monkeypa
         assert client.get('/api/updates').status_code==401
         assert client.post('/api/updates/check',json={}).status_code==401
         password_login(client,app)
-        assert client.get('/api/updates').json()['current_version']=='0.1.1'
+        assert client.get('/api/updates').json()['current_version']==__version__
         assert client.post('/api/updates/download',json={'release_id':12,'kind':[]}).status_code==400
         app.state.shutdown=lambda:None
         app.state.settings.update({'webui':{'remote_enabled':True}})

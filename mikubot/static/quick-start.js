@@ -43,11 +43,11 @@ window.MikubotQuickStart = (() => {
     }
     const adapter = ["napcat","snowluma","official"].includes(data.adapter) ? data.adapter : "napcat";
     if (adapter === "official") {
-      const official = {enabled:!!data.qq_enabled,app_id:String(data.app_id || "").trim(),allowed_groups:cleanIds(data.official_groups),allowed_users:cleanIds(data.official_users)};
+      const official = {chat_policy:data.chat_policy || settings.qq_official?.chat_policy || "blacklist",enabled:!!data.qq_enabled,app_id:String(data.app_id || "").trim(),allowed_groups:cleanIds(data.official_groups),allowed_users:cleanIds(data.official_users)};
       if (data.app_secret) official.app_secret = data.app_secret;
       return {onebot:{adapter,enabled:false},qq_official:official};
     }
-    const onebot = {adapter,enabled:!!data.qq_enabled,ws_url:String(data.ws_url || "").trim(),allowed_users:cleanIds(data.owner_ids),allowed_groups:cleanIds(data.allowed_groups)};
+    const onebot = {chat_policy:data.chat_policy || settings.onebot?.chat_policy || "blacklist",adapter,enabled:!!data.qq_enabled,ws_url:String(data.ws_url || "").trim(),allowed_users:cleanIds(data.owner_ids),allowed_groups:cleanIds(data.allowed_groups)};
     if (data.access_token) onebot.access_token = data.access_token;
     return {onebot,qq_official:{enabled:false}};
   }
@@ -58,9 +58,9 @@ window.MikubotQuickStart = (() => {
     if (!diagnostics.model?.configured) tips.push({title:"还没有可用模型",text:"连接自己的模型服务后才能自然聊天；记事、待办和资料管理可先在本地使用。",action:"quick-model",label:"连接模型"});
     if (diagnostics.budget?.exhausted) tips.push({title:"今日用量达到上限",text:"等待每日额度恢复，或核对设置中的预算。调整上限前请确认服务商余额。",action:"go-settings",label:"查看预算"});
     const qq = diagnostics.qq || {};
-    if (!qq.enabled) tips.push({title:"QQ 尚未启用",text:"如需 QQ 聊天，请选择接入方式并填写允许回复的群或用户。本地功能可以继续使用。",action:"quick-qq",label:"接入 QQ"});
+    if (!qq.enabled) tips.push({title:"QQ 尚未启用",text:"如需 QQ 聊天，选择接入方式并连接；新配置默认接收未被屏蔽的聊天。本地功能可以继续使用。",action:"quick-qq",label:"接入 QQ"});
     else if (!qq.status?.connected) tips.push({title:"QQ 当前未连接",text:qq.adapter === "official" ? "核对 AppID、AppSecret 和开放平台权限；凭据验证通过仍需等待实际连接。" : "确认 QQ 连接器已安装、运行并登录，再检查连接地址和双方的连接口令是否一致。",action:"qq-settings",label:"检查 QQ 设置"});
-    if (qq.enabled && !qq.allowed_groups && !qq.allowed_users) tips.push({title:"还没有允许回复的聊天",text:"连接成功也不会处理白名单外的消息。填写群号或用户标识，再到“群与会话”检查回应规则。",action:"qq-settings",label:"填写允许列表"});
+    if (qq.enabled && qq.chat_policy !== "blacklist" && !qq.allowed_groups && !qq.allowed_users) tips.push({title:"还没有允许回复的聊天",text:"连接成功也不会处理白名单外的消息。填写群号或用户标识，再到“群与会话”检查回应规则。",action:"qq-settings",label:"填写允许列表"});
     const received=qq.status?.message_events_received, last=qq.status?.last_message_result || {};
     if(qq.enabled && qq.status?.connected && received === 0) tips.push({title:"QQ 在线，等待第一条聊天消息",text:"请用允许名单中的账号私聊机器人，或在允许的群中 @ 它。只有心跳而收不到消息时，检查连接器是否开启消息上报。",action:"qq-settings",label:"检查消息上报"});
     if(qq.enabled && ["private_not_allowed","group_not_allowed"].includes(last.code)) tips.push({title:"最近一条消息被允许名单拦下",text:`${last.user_id ? "发送人 " + last.user_id + "。" : ""}${last.reason || "请把对应账号或群加入允许名单后，再发送一条新消息。"}`,action:"qq-settings",label:"核对允许名单"});
@@ -104,18 +104,20 @@ window.MikubotQuickStart = (() => {
       const onebot = state.settings.onebot || {}, official = state.settings.qq_official || {};
       const data = {adapter:onebot.adapter || "napcat",ws_url:onebot.ws_url || "",owner_ids:(onebot.allowed_users || onebot.owner_ids || []).join("\n"),allowed_groups:(onebot.allowed_groups || []).join("\n"),app_id:official.app_id || "",official_groups:(official.allowed_groups || []).join("\n"),official_users:(official.allowed_users || []).join("\n"),...(drafts[2] || {})};
       const adapter = data.adapter, isOfficial = adapter === "official", name = isOfficial ? "QQ 官方机器人" : adapter === "snowluma" ? "SnowLuma" : "NapCat";
+      const policy = data.chat_policy || (isOfficial ? official : onebot).chat_policy || "blacklist";
       const enabled = data.qq_enabled ?? (isOfficial ? official.enabled : onebot.enabled);
       const doc = isOfficial ? "https://q.qq.com/" : adapter === "snowluma" ? "https://snowluma.github.io/" : "https://napneko.github.io/";
       body = `<h3>选择 QQ 接入方式</h3><p class="quick-intro">可以跳过，先在本地聊天。接入后依次确认“已连接、收到消息、回复送达”。</p>${select("adapter","接入方式",[["napcat","NapCat"],["snowluma","SnowLuma"],["official","QQ 官方机器人"]],adapter,"data-full")}
-        <div class="quick-connector-guide"><strong>${isOfficial ? e(name) : "先登录连接器，再填写允许名单"}</strong><p>${isOfficial ? "先在 QQ 开放平台创建机器人并取得 AppID 和 AppSecret。可用场景、权限与审核要求以平台为准。" : `请先独立安装 ${name}、启动并完成 QQ 登录。与 mikubot 在同一台电脑时，优先使用下方自动配对。`}</p><a class="subtle-link" href="${doc}" target="_blank" rel="noopener noreferrer">打开 ${e(name)} 官方文档 ↗</a></div>
-        ${toggle("qq_enabled","保存后启用 QQ 连接","仅处理允许名单中的聊天；空名单即使在线也不会回复。",enabled)}<div class="form-grid">${isOfficial ? `${field("app_id","AppID",data.app_id,"text","QQ 开放平台的应用 ID。","data-full")}${field("app_secret","AppSecret","","password",official.app_secret_set ? "已保存，留空保持原值。" : "只保存在本机，不回显。","data-full autocomplete=\"new-password\"")}${textarea("official_groups","允许回复的群 OpenID",data.official_groups,"每行一个。官方群 OpenID 与普通 QQ 群号不同。")}${textarea("official_users","允许回复的用户 OpenID",data.official_users,"每行一个。使用官方事件中的用户 OpenID。")}` : `${textarea("owner_ids","允许私聊的 QQ 号",data.owner_ids,"填写用来和机器人聊天的账号，不是机器人自身的 QQ 号。每行一个。")}${textarea("allowed_groups","允许回复的 QQ 群号",data.allowed_groups,"每行一个；只使用私聊时可留空。名单中的群默认由 @、名字等回应规则决定是否回复。")}`}</div>
-        ${!isOfficial ? `<div class="quick-connector-guide"><strong>本机接入 · 推荐</strong><p>保存上方名单，再检测已登录的 ${e(name)}。输入它的管理口令后，自动创建反向 WebSocket；无需自己填写连接地址。</p>${button("保存名单并自动配对","quick-local-qq","primary small","link")}<small class="help-caption">管理口令属于连接器管理台，与模型密钥、mikubot 登录密码不同。</small></div><details class="details"><summary>连接器在另一台电脑，或需要手动连接</summary><p class="help-caption">在 ${e(name)} 中添加 OneBot v11 反向 WebSocket，填入地址和相同的连接口令，再点击下方保存。地址使用当前打开的主机；连接器需能访问这台电脑。</p><div class="code-block">${e(reverseAddress())}</div>${button("复制反向连接地址","quick-copy-address","small","link")}<div class="form-grid">${field("access_token","连接口令（Access Token）","","password",onebot.access_token_set ? "已保存，留空保持原值；连接器中使用同一口令。" : "自行设置后，在连接器中填写相同值。","data-full autocomplete=\"new-password\"")}${field("ws_url","已有正向 WebSocket 地址（可选）",data.ws_url,"text","通常留空使用反向连接；仅已有正向服务时填写。","data-full placeholder=\"ws://127.0.0.1:3001\"")}</div></details>` : ""}
-        <div id="quick-qq-result" aria-live="polite"></div><div class="quick-connector-guide"><strong>最后用一条真实消息验收</strong><ol class="guide-list"><li>从允许名单中的账号私聊机器人，或在允许的群里 @ 机器人。</li><li>保存后在首页检查“收到消息”计数是否增加；只有心跳时检查连接器的消息上报。</li><li>看到“平台已确认回复送达”才算收发完成。收到消息却不回复时，查看允许名单、暂停开关与会话回应规则。</li></ol></div>`;
+        <div class="quick-connector-guide"><strong>${isOfficial ? e(name) : "先登录连接器，再自动配对"}</strong><p>${isOfficial ? "先在 QQ 开放平台创建机器人并取得 AppID 和 AppSecret。可用场景、权限与审核要求以平台为准。" : `请先独立安装 ${name}、启动并完成 QQ 登录。与 mikubot 在同一台电脑时，优先使用下方自动配对。`}</p><a class="subtle-link" href="${doc}" target="_blank" rel="noopener noreferrer">打开 ${e(name)} 官方文档 ↗</a></div>
+        ${select("chat_policy","接收哪些聊天",[["blacklist","黑名单：接收未被屏蔽的聊天（推荐）"],["whitelist","白名单：只接收指定聊天"]],policy,"data-full")}${toggle("qq_enabled","保存后启用 QQ 连接","黑名单模式下不用填账号；收到聊天会自动收集，未单独设置的聊天使用默认配置。",enabled)}<div class="form-grid">${isOfficial ? `${field("app_id","AppID",data.app_id,"text","QQ 开放平台的应用 ID。","data-full")}${field("app_secret","AppSecret","","password",official.app_secret_set ? "已保存，留空保持原值。" : "只保存在本机，不回显。","data-full autocomplete=\"new-password\"")}${textarea("official_groups","允许回复的群 OpenID",data.official_groups,"每行一个。官方群 OpenID 与普通 QQ 群号不同。")}${textarea("official_users","允许回复的用户 OpenID",data.official_users,"每行一个。使用官方事件中的用户 OpenID。")}` : `${textarea("owner_ids","允许私聊的 QQ 号",data.owner_ids,"填写用来和机器人聊天的账号，不是机器人自身的 QQ 号。每行一个。")}${textarea("allowed_groups","允许回复的 QQ 群号",data.allowed_groups,"每行一个；只使用私聊时可留空。名单中的群默认由 @、名字等回应规则决定是否回复。")}`}</div>
+        ${!isOfficial ? `<div class="quick-connector-guide"><strong>本机接入 · 推荐</strong><p>保存接收规则，再检测已登录的 ${e(name)}。输入它的管理口令后，自动创建反向 WebSocket；无需自己填写连接地址。</p>${button("保存并自动配对","quick-local-qq","primary small","link")}<small class="help-caption">管理口令属于连接器管理台，与模型密钥、mikubot 登录密码不同。</small></div><details class="details"><summary>连接器在另一台电脑，或需要手动连接</summary><p class="help-caption">在 ${e(name)} 中添加 OneBot v11 反向 WebSocket，填入地址和相同的连接口令，再点击下方保存。地址使用当前打开的主机；连接器需能访问这台电脑。</p><div class="code-block">${e(reverseAddress())}</div>${button("复制反向连接地址","quick-copy-address","small","link")}<div class="form-grid">${field("access_token","连接口令（Access Token）","","password",onebot.access_token_set ? "已保存，留空保持原值；连接器中使用同一口令。" : "自行设置后，在连接器中填写相同值。","data-full autocomplete=\"new-password\"")}${field("ws_url","已有正向 WebSocket 地址（可选）",data.ws_url,"text","通常留空使用反向连接；仅已有正向服务时填写。","data-full placeholder=\"ws://127.0.0.1:3001\"")}</div></details>` : ""}
+        <div id="quick-qq-result" aria-live="polite"></div><div class="quick-connector-guide"><strong>最后用一条真实消息验收</strong><ol class="guide-list"><li>用自己的账号私聊机器人，或在未被屏蔽的群里 @ 机器人；白名单模式需先加入名单。</li><li>保存后在首页检查“收到消息”计数是否增加；只有心跳时检查连接器的消息上报。</li><li>看到“平台已确认回复送达”才算收发完成。收到消息却不回复时，查看黑名单/白名单、暂停开关和默认回应规则。</li></ol></div>`;
       footer = button("先在本地使用","quick-finish","ghost") + (isOfficial ? button("验证官方凭据","quick-test-official","","shield") : "") + '<button type="submit" class="btn primary">保存并检查连接 →</button>';
     }
     $("#modal").classList.remove("modal-wide");
     $("#modal-content").innerHTML = `<div class="wizard-banner"><button class="icon-button quick-close" data-action="quick-finish" aria-label="关闭快速入门">${icon("close")}</button><div class="eyebrow">MIKUBOT · QUICK START</div><h2>先聊起来，其他随时再设置。</h2><p>每一步单独保存；跳过时保留已有配置。</p><ol class="wizard-steps quick-steps">${steps.map((name,index) => `<li class="${index === current ? "current" : ""}" ${index === current ? 'aria-current="step"' : ""}>${index+1} ${e(name)}</li>`).join("")}</ol></div><form data-form="quick-start"><div class="wizard-body">${body}<div id="modal-error" hidden class="modal-error"></div></div><div class="modal-footer">${current > 0 ? button("上一步","quick-back","ghost") : ""}${footer}</div></form>`;
     if (!$("#modal").open) $("#modal").showModal();
+    if (typeof syncToastLayer === "function") syncToastLayer();
     $("#modal").scrollTop = 0;
     $("#modal-content input:not([type=checkbox]), #modal-content select")?.focus({preventScroll:true});
   }
@@ -160,11 +162,16 @@ window.MikubotQuickStart = (() => {
       await window.MikubotPages.startQuickModel(async () => { open(2); toast("聊天模型已保存，下一步可接入 QQ，也可以先在本地聊天。"); });
     } else if (action === "quick-local-qq") {
       const form = target.closest("form"), data = getForm(form);
-      if (!cleanIds(data.owner_ids).length && !cleanIds(data.allowed_groups).length) throw new Error("先填写至少一个允许私聊的 QQ 号或群号，避免连接成功后仍无法回复。");
+      if ((data.chat_policy || state.settings.onebot?.chat_policy || "blacklist") === "whitelist" && !cleanIds(data.owner_ids).length && !cleanIds(data.allowed_groups).length) throw new Error("先填写至少一个允许私聊的 QQ 号或群号，避免连接成功后仍无法回复。");
       target.disabled = true;
       try {
         const fresh = await api("/api/settings");
-        await api("/api/settings",{method:"PUT",body:buildPatch(2,{...data,qq_enabled:true,ws_url:""},fresh)});
+        const patch=buildPatch(2,data,fresh);
+        // Pairing generates its receiver token and enables the connector only
+        // after the remote configuration succeeds. Do not require a token here
+        // or interrupt an existing forward connection while opening the form.
+        delete patch.onebot.enabled;delete patch.onebot.ws_url;
+        await api("/api/settings",{method:"PUT",body:patch});
         drafts = {}; await bootstrap();
         await window.MikubotExperience.handleAction("local-qq",target);
       } finally { target.disabled = false; }

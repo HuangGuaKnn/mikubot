@@ -42,14 +42,28 @@ def normalize_administrators(items):
     return result
 
 
-def private_allowed(config, platform, account_id):
+def chat_allowed(config, platform, kind, account_id):
+    """One admission policy for ingress, recall, scheduling and delivery.
+
+    Missing mode means the historical allowlist policy. It must never silently
+    widen access for an older configuration or a third-party settings provider.
+    """
+    if platform not in ('onebot', 'qqofficial') or kind not in ('group', 'private'):
+        return False
     section = config.get('onebot' if platform == 'onebot' else 'qq_official', {})
+    suffix = 'groups' if kind == 'group' else 'users'
+    if section.get('chat_policy', 'whitelist') == 'blacklist':
+        return str(account_id) not in {str(value) for value in section.get('blocked_' + suffix, [])}
     # Read-only compatibility for simple legacy settings providers. Settings
     # migrates real persisted owner_ids into allowed_users on load/save.
-    values = section.get('allowed_users', [])
-    if platform == 'onebot' and section.get('owner_ids'):
+    values = section.get('allowed_' + suffix, [])
+    if kind == 'private' and platform == 'onebot' and section.get('owner_ids'):
         values = [*values, *section['owner_ids']]
     return str(account_id) in {str(value) for value in values}
+
+
+def private_allowed(config, platform, account_id):
+    return chat_allowed(config, platform, 'private', account_id)
 
 
 class AccessManager:

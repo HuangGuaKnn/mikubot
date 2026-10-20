@@ -62,15 +62,14 @@ class ContextEngine:
         if not qq.get("enabled") or (section == "qq_official") != (adapter == "official"):
             return False
         if parts[1] == 'group':
-            return parts[2] in {str(item) for item in qq.get('allowed_groups', [])}
+            from .access import chat_allowed
+            return chat_allowed(cfg, 'qqofficial' if section == 'qq_official' else 'onebot', 'group', parts[2])
         return parts[1] == 'private' and private_allowed(cfg, 'qqofficial' if section == 'qq_official' else 'onebot', parts[2])
 
-    def _projection(self, scope_id, user_id):
-        records = (self.store.list_memories(scope_id=scope_id) + self.store.list_memories(scope_id=scope_id, status="deleted")
-                   + self.store.list_jargon(scope_id=scope_id) + self.store.list_jargon(scope_id=scope_id, status="deleted"))
-        blocked = {source for record in records for source in record.get("blocked_source_ids", [])}
+    def _projection(self, scope_id, user_id, *, memory_ids=None):
+        blocked = self.store.blocked_memory_sources(scope_id)
         memories = {record["id"]: record for record in self.store.visible_memories(scope_id, user_id,
-                    scope_allowed=lambda origin: self._permission(origin, user_id)) if self._reference_allowed(record, scope_id, user_id)}
+                    scope_allowed=lambda origin: self._permission(origin, user_id), record_ids=memory_ids) if self._reference_allowed(record, scope_id, user_id)}
         scope = self.store.get_scope(scope_id)
         jargon = {record["id"]: record for record in self.store.list_jargon(scope_id=scope_id, status="approved")
                   if record.get("entry_type", "jargon") == "expression"
@@ -81,7 +80,32 @@ class ContextEngine:
         return blocked, memories, jargon
 
     def _manifest(self, scope_id, user_id, history, *, projection=None):
-        blocked, memories, jargon = projection or self._projection(scope_id, user_id)
+        if projection is None:
+            # Only memory IDs referenced by this history and its source closure
+            # are needed. Ordinary messages must not load every saved fact.
+            memory_ids, seen, pending = set(), set(), list(history)
+            while pending:
+                record = pending.pop()
+                if not isinstance(record, dict) or record.get('id') in seen:
+                    continue
+                seen.add(record.get('id'))
+                metadata = record.get('metadata') or {}
+                if not isinstance(metadata, dict): continue
+                versions = metadata.get('memory_versions', {})
+                if isinstance(versions, dict): memory_ids.update(versions)
+                for field in ('context_source_ids', 'source_ids'):
+                    values = metadata.get(field) or []
+                    if not isinstance(values, list): continue
+                    for key in values:
+                        if not isinstance(key, str): continue
+                        memory_ids.add(key)  # Legacy histories may cite a memory directly.
+                        if key in seen: continue
+                        try: source = self.store.get_message(key)
+                        except KeyError: continue
+                        if source.get('scope_id') == scope_id:
+                            pending.append(source)
+            projection = self._projection(scope_id, user_id, memory_ids=memory_ids)
+        blocked, memories, jargon = projection
         public = scope_id.startswith(("qq:group:", "qqofficial:group:"))
         valid, sources, memory_versions, jargon_versions = [], {}, {}, {}
 
@@ -152,7 +176,7 @@ class ContextEngine:
     def _result(self, scope_id, user_id, messages, summary=None, *, reason="below_threshold"):
         valid, sources, memories, jargon = self._manifest(scope_id, user_id, messages)
         if summary:
-            visible = self._projection(scope_id, user_id)[1]
+            visible = self._projection(scope_id, user_id, memory_ids=[summary['id']])[1]
             current = visible.get(summary["id"])
             if not current or current.get("version") != summary.get("version"):
                 # A concurrent invalidation must not discard still-valid raw
@@ -181,7 +205,8 @@ class ContextEngine:
         return json.dumps({key: message.get(key) for key in ("id", "user_id", "role", "created_at", "content")}, ensure_ascii=False)
 
     def _latest_summary(self, scope_id, user_id):
-        summaries = [record for record in self._projection(scope_id, user_id)[1].values()
+        candidates = self.store.memory_property_records(scope_id, 'conversation_digest', 'active')
+        summaries = [record for record in self._projection(scope_id, user_id, memory_ids=[item['id'] for item in candidates])[1].values()
                      if record.get("property") == "conversation_digest" and record.get("derived")]
         # visible_memories preserves insertion order, including timestamp ties.
         return summaries[-1] if summaries else None

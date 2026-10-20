@@ -457,6 +457,14 @@ def bundled_payload() -> tuple[Path, dict]:
         raise InstallError('安装包缺少内置程序，请下载完整的 mikubot 安装程序。') from exc
 
 
+def gui_install_target(selected: Path | str) -> Path:
+    """Selecting a parent creates mikubot; existing owned installs stay in place."""
+    path = Path(selected).expanduser().absolute()
+    if path.name.casefold() == 'mikubot' or (path / INSTALL_RECORD).is_file():
+        return path
+    return path / 'mikubot'
+
+
 def run_gui(payload: Path, manifest: dict, initial_target: Path, data_dir=None):
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
@@ -468,11 +476,30 @@ def run_gui(payload: Path, manifest: dict, initial_target: Path, data_dir=None):
         window.iconbitmap(default=str(asset_path('mikubot.ico')))
     except tk.TclError:
         pass  # Non-Windows Tk backends do not all support .ico files.
-    window.geometry('600x425')
-    window.minsize(560, 425)
+    window.geometry('640x560')
+    window.minsize(540, 420)
     window.configure(bg='#f5f8f8')
-    frame = ttk.Frame(window, padding=26)
-    frame.pack(fill='both', expand=True)
+    # Reserve the action row before packing any scrollable content. Tk uses
+    # logical sizing under DPI scaling, so fixed pixel heights are insufficient.
+    footer = ttk.Frame(window, padding=(20, 12))
+    footer.pack(side='bottom', fill='x')
+    body = ttk.Frame(window)
+    body.pack(fill='both', expand=True)
+    canvas = tk.Canvas(body, highlightthickness=0, bg='#f5f8f8')
+    scrollbar = ttk.Scrollbar(body, orient='vertical', command=canvas.yview)
+    scrollbar.pack(side='right', fill='y')
+    canvas.pack(side='left', fill='both', expand=True)
+    canvas.configure(yscrollcommand=scrollbar.set)
+    frame = ttk.Frame(canvas, padding=20)
+    content = canvas.create_window((0, 0), window=frame, anchor='nw')
+    frame.bind('<Configure>', lambda event: canvas.configure(scrollregion=canvas.bbox('all')))
+    def resize_content(event):
+        canvas.itemconfigure(content, width=event.width)
+        for child in frame.winfo_children():
+            if isinstance(child, ttk.Label) and child.cget('wraplength'):
+                child.configure(wraplength=max(200, event.width - 40))
+    canvas.bind('<Configure>', resize_content)
+    canvas.bind_all('<MouseWheel>', lambda event: canvas.yview_scroll(-int(event.delta / 120), 'units'))
     heading = ttk.Frame(frame)
     heading.pack(fill='x')
     try:
@@ -489,9 +516,9 @@ def run_gui(payload: Path, manifest: dict, initial_target: Path, data_dir=None):
     path_entry = ttk.Entry(row, textvariable=path_var)
     path_entry.pack(side='left', fill='x', expand=True)
     def browse():
-        selected = filedialog.askdirectory(title='选择安装文件夹', initialdir=str(Path(path_var.get()).parent))
+        selected = filedialog.askdirectory(title='选择安装位置（自动创建 mikubot 文件夹）', initialdir=str(Path(path_var.get()).parent))
         if selected:
-            path_var.set(selected)
+            path_var.set(str(gui_install_target(selected)))
     browse_button = ttk.Button(row, text='浏览…', command=browse)
     browse_button.pack(side='right', padx=(8, 0))
     desktop_var, menu_var, launch_var = tk.BooleanVar(value=True), tk.BooleanVar(value=True), tk.BooleanVar(value=True)
@@ -507,7 +534,7 @@ def run_gui(payload: Path, manifest: dict, initial_target: Path, data_dir=None):
     ttk.Label(frame, textvariable=status_var, wraplength=535).pack(anchor='w', pady=(6, 8))
     events = queue.Queue()
     state = {'busy': False, 'done': False}
-    action = ttk.Button(frame, text='一键安装')
+    action = ttk.Button(footer, text='一键安装')
     action.pack(anchor='e')
 
     def start():
@@ -515,7 +542,8 @@ def run_gui(payload: Path, manifest: dict, initial_target: Path, data_dir=None):
             window.destroy()
             return
         try:
-            selected = validate_target(path_var.get())
+            selected = validate_target(gui_install_target(path_var.get()))
+            path_var.set(str(selected))
         except InstallError as exc:
             messagebox.showerror('无法安装', str(exc), parent=window)
             return

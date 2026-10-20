@@ -22,12 +22,17 @@ DEFAULTS = {
     'model': {'base_url': '', 'model': '', 'api_key': '', 'vision': False,
               'temperature': 0.7, 'input_price': 0.0, 'output_price': 0.0},
     'onebot': {'enabled': False, 'adapter': 'napcat', 'ws_url': '', 'access_token': '',
-               'owner_ids': [], 'allowed_users': [], 'allowed_groups': [], 'max_message_chars': 0},
-    'qq_official': {'enabled': False, 'app_id': '', 'app_secret': '', 'allowed_groups': [], 'allowed_users': [], 'max_message_chars': 0},
+               'owner_ids': [], 'allowed_users': [], 'allowed_groups': [], 'chat_policy': 'blacklist',
+               'blocked_users': [], 'blocked_groups': [], 'max_message_chars': 0},
+    'qq_official': {'enabled': False, 'app_id': '', 'app_secret': '', 'allowed_groups': [], 'allowed_users': [],
+                    'chat_policy': 'blacklist', 'blocked_users': [], 'blocked_groups': [], 'max_message_chars': 0},
     'budget': {'daily_tokens': 100000, 'daily_cost': 0.0},
     'memory': {'semantic_enabled': False, 'embedding_model': '', 'embedding_price': 0.0,
                'top_k': 8, 'auto_review': True, 'organization_enabled': True},
-    'planner': {'min_interval_ms':1200, 'daily_calls':300, 'daily_tokens':12000, 'max_age_ms':15000},
+    'planner': {'min_interval_ms':1200, 'daily_calls':300, 'daily_tokens':12000, 'max_age_ms':15000,
+                'group_batch_ms':1500,'group_batch_messages':4},
+    'stickers': {'enabled':True,'collect_enabled':True,'collect_probability':0.1,'send_enabled':True,
+                 'send_probability':0.1,'model_id':'','min_confidence':0.85,'daily_recognitions':30,'max_items':1000},
     'scheduler': {'model_concurrency':1,'model_queue_limit':32,'background_queue_limit':16,'scope_queue_limit':8},
     'access': {'administrators': []},
     'webui': {'remote_enabled': False, 'host': '0.0.0.0', 'port': 8765, 'allowed_hosts': [], 'public_url': '', 'require_https':True, 'trusted_proxy_ips':[]},
@@ -64,7 +69,7 @@ def resolved_identity(config, scope=None):
 
 def resolve_model(config, purpose='chat', *, model_id=None):
     """An empty task route keeps the original single-model configuration."""
-    aliases = {'jargon_learning': 'memory', 'expression_learning': 'memory', 'memory_extract': 'memory', 'context_digest': 'summary','knowledge':'summary'}
+    aliases = {'jargon_learning': 'memory', 'expression_learning': 'memory', 'memory_extract': 'memory', 'context_digest': 'summary','knowledge':'summary','sticker_select':'planner'}
     route = aliases.get(purpose, purpose)
     route = route if route in ('planner','memory', 'gate', 'summary', 'embedding') else 'chat'
     provider_id = config.get('routing', {}).get(route, '') if model_id is None else model_id
@@ -183,6 +188,9 @@ class Settings:
             if 'allowed_users' not in raw.get('onebot', {}):
                 self._data['onebot']['allowed_users'] = list(legacy)
         self._data['onebot']['owner_ids'] = []
+        for section in ('onebot', 'qq_official'):
+            if 'chat_policy' not in raw.get(section, {}):
+                self._data[section]['chat_policy'] = 'whitelist'
         for section, key in [('model', 'api_key'), ('onebot', 'access_token'), ('qq_official', 'app_secret')]:
             try:
                 self._data[section][key] = self._decode_secret(self._data[section].get(key, ''))
@@ -472,10 +480,21 @@ class Settings:
             identity['aliases']=list(dict.fromkeys(x.strip() for x in identity['aliases']))
             for key in ('respond_to_at','respond_to_reply','respond_to_name','planner_enabled','proactive_enabled'):
                 if type(identity[key]) is not bool: raise ValueError('身份与触发开关须为布尔值')
-            for key, minimum, maximum in (('min_interval_ms',0,60000),('daily_calls',0,100000),('daily_tokens',0,10000000),('max_age_ms',1000,120000)):
+            for key, minimum, maximum in (('min_interval_ms',0,60000),('daily_calls',0,100000),('daily_tokens',0,10000000),('max_age_ms',1000,120000),('group_batch_ms',0,10000),('group_batch_messages',2,20)):
                 value=updated['planner'][key]
                 if type(value) is not int or not minimum <= value <= maximum:
                     raise ValueError(f'Planner {key}须为{minimum}—{maximum}的整数')
+            stickers=updated['stickers']
+            for key in ('enabled','collect_enabled','send_enabled'):
+                if type(stickers[key]) is not bool: raise ValueError('表情包开关须为布尔值')
+            for key in ('collect_probability','send_probability','min_confidence'):
+                if isinstance(stickers[key],bool) or not isinstance(stickers[key],(int,float)) or not math.isfinite(stickers[key]) or not 0<=stickers[key]<=1:
+                    raise ValueError('表情包概率须在0到1之间')
+            for key,maximum in (('daily_recognitions',1000),('max_items',5000)):
+                if type(stickers[key]) is not int or not (0 if key=='daily_recognitions' else 1)<=stickers[key]<=maximum:
+                    raise ValueError('表情包数量配置无效')
+            if not isinstance(stickers['model_id'],str) or stickers['model_id'] and stickers['model_id']!='default' and stickers['model_id'] not in ids:
+                raise ValueError('表情包识图模型不存在')
             for section in ('onebot','qq_official'):
                 value=updated[section]['max_message_chars']
                 if type(value) is not int or value != 0 and not 40 <= value <= 20000:
@@ -516,7 +535,10 @@ class Settings:
             if updated['budget']['daily_cost'] and any(x.get('base_url') and x.get('model') and not (x.get('input_price') or x.get('output_price')) for x in price_models):
                 raise ValueError('启用费用预算前请填写模型单价；未知价格时可使用 Token 预算')
             qq = updated['onebot']
-            for key in ('owner_ids', 'allowed_users', 'allowed_groups'):
+            for section in ('onebot', 'qq_official'):
+                if updated[section].get('chat_policy') not in ('blacklist', 'whitelist'):
+                    raise ValueError('聊天接收规则须为黑名单或白名单')
+            for key in ('owner_ids', 'allowed_users', 'allowed_groups', 'blocked_users', 'blocked_groups'):
                 vals = qq[key]
                 if isinstance(vals, str):
                     vals = vals.replace('，', ',').replace('\n', ',').split(',')
@@ -583,7 +605,7 @@ class Settings:
                 if type(computer[key]) is not int or not low <= computer[key] <= high:
                     raise ValueError(f'电脑任务 {key}须为{low}—{high}的整数')
             official = updated['qq_official']
-            for key in ('allowed_groups', 'allowed_users'):
+            for key in ('allowed_groups', 'allowed_users', 'blocked_users', 'blocked_groups'):
                 vals = official[key]
                 if isinstance(vals, str):
                     vals = vals.replace('，', ',').replace('\n', ',').split(',')

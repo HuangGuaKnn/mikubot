@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from .onebot import _ids, is_quiet, scope_value
-from .access import private_allowed
+from .access import private_allowed, chat_allowed
 
 
 def _datetime(value):
@@ -61,12 +61,12 @@ class TaskScheduler:
             qq = cfg.get('onebot', {})
             if not qq.get('enabled') or qq.get('adapter', 'napcat') == 'official':
                 return False
-            allowed = target in _ids(qq.get('allowed_groups')) if kind == 'group' else private_allowed(cfg, 'onebot', target)
+            allowed = chat_allowed(cfg, 'onebot', kind, target)
         elif platform == 'qqofficial':
             qq = cfg.get('qq_official', {})
             if cfg.get('onebot', {}).get('adapter') != 'official' or not qq.get('enabled'):
                 return False
-            allowed = target in _ids(qq.get('allowed_groups')) if kind == 'group' else private_allowed(cfg, 'qqofficial', target)
+            allowed = chat_allowed(cfg, 'qqofficial', kind, target)
         else:
             return False
         return allowed and kind in ('group', 'private') and not is_quiet(scope, now) and self.bridge.status().get('connected', False)

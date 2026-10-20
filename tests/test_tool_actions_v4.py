@@ -33,7 +33,7 @@ class Settings:
         self.config['mcp_servers'] = [{'id': 'notes', 'name': '测试便签',
             'url': 'http://127.0.0.1:5678/mcp', 'enabled': True,
             'token': 'private-mcp-token-do-not-leak', 'allowed_tools': ['append_note']}]
-        self.config['onebot'].update(enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
+        self.config['onebot'].update(chat_policy="whitelist", enabled=True, adapter='napcat', owner_ids=['101'], allowed_groups=['202'])
 
     def get(self):
         return deepcopy(self.config)

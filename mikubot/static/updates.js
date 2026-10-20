@@ -37,7 +37,7 @@ window.MikubotUpdates = (() => {
   function paint() { const node=$("#updates-section");if(node)node.innerHTML=markup(); }
   function schedule() {
     stop();
-    if (state.page!=="settings" || !state.authenticated || status?.download?.status!=="downloading")return;
+    if (!$("#updates-section") || !state.authenticated || status?.download?.status!=="downloading")return;
     timer=setTimeout(async()=>{try{if(!document.hidden){status=await api("/api/updates");paint();}}catch(exc){error=exc.message;paint();}finally{schedule();}},1000);
   }
   async function settingsPanel() {
@@ -46,6 +46,10 @@ window.MikubotUpdates = (() => {
   }
   async function action(action,target) {
     if (!action.startsWith("update-"))return false;
+    if (action === "update-open") {
+      openModal("版本与更新","检查、选择并下载 GitHub 上已发布的版本。",await settingsPanel());
+      $("#modal").classList.add("modal-wide");schedule();return true;
+    }
     if (busy) return true;
     if (action==="update-install") {
       const download=status?.download;
