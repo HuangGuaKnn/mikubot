@@ -1,18 +1,22 @@
-# mikubot 0.1.2
+# mikubot 0.1.3
 
-当前版本为 **0.1.2**，提供Windows安装版、便携版和源码包。新增可编辑的表情包库和群聊集中判断，简化机器人配置、QQ接入与会话管理，优化大量记忆检索和消息分段。详见[更新日志](RELEASE_NOTES.md)。
+> **0.1.3** 新增本地插件、Windows 安装版一键更新、数据统计和模型生成时分段，并修复模型超时误报。详见[更新日志](RELEASE_NOTES.md)和[整改记录](docs/LOCAL_AUDIT.md)。
+
+当前版本为 **0.1.3**，提供Windows安装版、便携版和源码包。本地聊天支持生成与运行插件，Windows安装版支持一键更新；模型在生成时决定消息边界，新增数据统计、可配置时区与统一表情包调用配额。详见[更新日志](RELEASE_NOTES.md)。
 
 本机运行的 AI 聊天机器人与任务助手。预装可删除的初音未来人格，支持独立聊天、QQ 接入、记忆、黑话学习、人格蒸馏和管理员电脑任务。
 
+项目原创代码使用 [MIT 许可证](LICENSE)，第三方组件及其对应源码说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。当前规范见 [CONTRACT.md](CONTRACT.md)；早期内部版本记录放在 `docs/archive/`。
+
 ## 下载与选择
 
-前往 **[GitHub Releases 下载0.1.2](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.2)**，展开Assets，按用途选择：
+前往 **[GitHub Releases 下载0.1.3](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.3)**，展开Assets，按用途选择：
 
 | 文件 | 适合谁 | 使用方式 |
 | --- | --- | --- |
-| [mikubot-0.1.2-Windows-Setup.exe](https://github.com/iownmmiku/mikubot/releases/download/v0.1.2/mikubot-0.1.2-Windows-Setup.exe) | Windows 用户，推荐 | 选择父目录后自动创建 mikubot 文件夹，安装后从快捷方式打开 |
-| [mikubot-0.1.2-Windows-x64.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.2/mikubot-0.1.2-Windows-x64.zip) | 希望解压即用 | 完整解压后双击 `mikubot.exe`，不要只取出 EXE |
-| [mikubot-0.1.2-source.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.2/mikubot-0.1.2-source.zip) | 希望运行或修改代码 | 安装 Python 3.12，按下方命令启动 |
+| [mikubot-0.1.3-Windows-Setup.exe](https://github.com/iownmmiku/mikubot/releases/download/v0.1.3/mikubot-0.1.3-Windows-Setup.exe) | Windows 用户，推荐 | 选择父目录后自动创建 mikubot 文件夹，安装后从快捷方式打开 |
+| [mikubot-0.1.3-Windows-x64.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.3/mikubot-0.1.3-Windows-x64.zip) | 希望解压即用 | 完整解压后双击 `mikubot.exe`，不要只取出 EXE |
+| [mikubot-0.1.3-source.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.3/mikubot-0.1.3-source.zip) | 希望运行或修改代码 | 安装 Python 3.12，按下方命令启动 |
 
 安装版和便携版无需 Python、Node 或 Git，默认打开独立桌面窗口。它们不包含模型账号、API Key、QQ 客户端或 NapCat/SnowLuma，需要自行准备。模型调用按所选服务商规则计费。
 
@@ -51,7 +55,7 @@
 
 在“机器人配置 → 电脑与管理员”开启能力、选择工作目录，然后在聊天中选择“电脑任务”，或由 QQ 管理员发送 `/执行 具体任务`。支持 Shell、Python、文件读取、搜索、新建与修改；新安装默认选择 Docker 隔离执行，原有本机模式不强制迁移；默认自动执行，可在任务卡片停止。`/任务 任务编号` 查看进度，`/停止 任务编号` 停止。
 
-**本机模式的 Shell/Python 使用当前系统账户权限，工作目录不是隔离沙箱。Docker 模式只挂载工作目录、默认断网且限制资源；需要本机 Linux 容器引擎和预先准备的镜像，不可用时停止任务。**只向可信管理员开放电脑能力。本版不提供鼠标键盘与屏幕截图循环；任务退出或重启后不会自动重跑。MCP 工具还受服务与工具允许列表约束；开启电脑能力且使用自动模式时，管理员的允许调用可连续执行。Docker 电脑能力开启时默认禁用沙箱外 MCP；确有需要须在高级设置明确开启，其执行仍不在代码容器内。
+**本机模式的 Shell/Python 使用当前系统账户权限，工作目录不是隔离沙箱。Docker 沙箱隔离主机系统，不保护工作目录内的文件；/workspace 是可写映射，脚本可在其中增删文件。Docker 默认断网且限制资源，需本机 Linux 容器引擎及指定摘要镜像；按“检查隔离环境”返回的完整命令准备，不可用时停止任务。**只向可信管理员开放电脑能力。本版不提供鼠标键盘与屏幕截图循环；任务退出或重启后不会自动重跑。MCP 工具还受服务与工具允许列表约束；开启电脑能力且使用自动模式时，管理员的允许调用可连续执行。Docker 电脑能力开启时默认禁用沙箱外 MCP；确有需要须在高级设置明确开启，其执行仍不在代码容器内。
 
 ## 其他功能
 
@@ -64,7 +68,7 @@
 
 ## 从源码运行
 
-Windows 安装 **Python 3.11–3.13（推荐3.12）**，完整解压`mikubot-0.1.2-source.zip`，或克隆本仓库。在包含 `requirements.txt` 的目录打开 PowerShell：
+Windows 安装 **Python 3.11–3.13（推荐3.12）**，完整解压`mikubot-0.1.3-source.zip`，或克隆本仓库。在包含 `requirements.txt` 的目录打开 PowerShell：
 
 ```powershell
 # 首次：创建 .venv、安装依赖并启动，下载依赖需要网络
@@ -86,7 +90,7 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1 -DataDir 'D:\mikubot-data'
 powershell -ExecutionPolicy Bypass -File .\start.ps1 -DataDir 'D:\mikubot-data' -Stop
 ```
 
-源码运行无需 Node、Git 或前端构建。只准备环境使用 `-SetupOnly`；显式浏览器模式使用 `-Browser`。手动 Python 部署、HTTPS 反代、修复环境与实验性 Linux 运行见[源码部署指南](docs/SOURCE_DEPLOY.md)。核心包已迁为 `mikubot`，旧 `qunyu` 导入和启动入口保留兼容，数据库文件名不变。无头部署安装 `requirements-server.txt`，Windows 桌面依赖单独放在 `requirements-desktop.txt`；Docker 与 HTTPS 见同一部署指南。
+源码运行无需 Node、Git 或前端构建。只准备环境使用 `-SetupOnly`；显式浏览器模式使用 `-Browser`。手动 Python 部署、HTTPS 反代、修复环境与实验性 Linux 运行见[源码部署指南](docs/SOURCE_DEPLOY.md)。核心包已迁为 `mikubot`，旧 `qunyu` 导入和启动入口暂保留兼容，计划0.3.0移除，数据库文件名不变。无头部署安装 `requirements-server.txt`，Windows 桌面依赖单独放在 `requirements-desktop.txt`；Docker 与 HTTPS 见同一部署指南。
 
 ## 数据、密码与远程管理
 
@@ -100,11 +104,16 @@ Windows 默认数据在 **`%LOCALAPPDATA%\mikubot\data`**，独立于程序目�
 
 ## 在软件内选择版本与更新
 
-右上角“版本与更新”可检查固定GitHub仓库、选择正式版/测试版/历史版本、查看说明并下载指定文件。下载通过大小和SHA-256校验后，Windows安装版可在本机确认“退出并启动安装”；源码和便携版下载到新目录后按指南部署。历史版本只下载，不直接覆盖降级。不会自动拉取代码或覆盖未提交改动，详见[更新指南](docs/UPDATES.md)。
+右上角“版本与更新”可检查固定GitHub仓库、选择正式版/测试版/历史版本、查看说明并下载指定文件。0.1.3新增 Windows 安装版“一键更新”：下载校验、退出、静默安装、以原数据目录重新打开；仍可仅下载或使用原安装窗口。源码和便携版下载到新目录后按指南部署。历史版本只下载，不直接覆盖降级。不会自动拉取代码或覆盖未提交改动，详见[更新指南](docs/UPDATES.md)。
 
-0.1.0安装包没有更新入口，请先手动安装一次0.1.2；之后可在软件内检查并下载已发布版本。
+0.1.0安装包没有更新入口，请先手动安装一次0.1.3；之后可在软件内检查并下载已发布版本。
 
 ## 文档与验证范围
+
+- [模型自然分段](docs/MODEL_OUTPUT.md)：生成时决定消息边界，保留传输保护和旧模式兼容。
+
+- [插件编写与本地聊天生成](docs/PLUGINS.md)：插件页、Python 接口、启用与运行边界。
+- [当前前端结构](docs/FRONTEND.md)：页面模块、加载顺序及维护方式。
 
 - [完整使用指南](docs/USER_GUIDE.md)：密码、模型、QQ、管理员、电脑任务、人格与常见问题；软件内也可打开“使用指南”。
 - [源码部署指南](docs/SOURCE_DEPLOY.md)：环境、启动参数、迁移与远程部署。

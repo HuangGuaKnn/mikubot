@@ -33,5 +33,5 @@ jobs:
         with:
           python-version: '3.12'
       - run: docker compose build
-      - run: docker pull python:3.12-slim
+      - run: python -c "import subprocess; from mikubot.sandbox import IMAGE; subprocess.run(['docker','pull',IMAGE],check=True)"
       - run: python scripts/check_docker_isolation.py --require

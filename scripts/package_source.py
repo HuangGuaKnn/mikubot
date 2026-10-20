@@ -12,7 +12,7 @@ import zipfile
 
 ROOT_FILES = {
     '.gitignore', 'README.md', 'RELEASE_NOTES.md', 'TEST_REPORT.md', 'CONTRACT.md',
-    'THIRD_PARTY_NOTICES.md',
+    'THIRD_PARTY_NOTICES.md', 'LICENSE',
     'pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'requirements-lock.txt', 'requirements-server.txt', 'requirements-desktop.txt',
     'Dockerfile', 'compose.yaml', '.dockerignore',
     'start.ps1', 'start.sh', 'launcher.py', 'installer_launcher.py',
@@ -92,7 +92,7 @@ def source_files(root: Path) -> list[Path]:
                 static = tree == 'mikubot' and relative.parts[0] == 'static'
                 allowed = (path.suffix.casefold() in types
                            or (static and path.suffix.casefold() in STATIC_TYPES)
-                           or (resource and (path.suffix.casefold() in {'.md'} or name in RESOURCE_NOTICES))
+                           or (resource and (path.suffix.casefold() in {'.md', '.ps1'} or name in RESOURCE_NOTICES))
                            or (tree == 'third_party/pystray' and name in {'COPYING', 'COPYING.LGPL'}))
                 if not allowed:
                     continue

@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import secrets
+import socket
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,7 +21,7 @@ def instance_mutex_name(data_dir: Path) -> str:
 
 
 @contextmanager
-def data_guard(data_dir: Path):
+def _system_data_guard(data_dir: Path):
     """Exclusive process guard, also used while copying an old data directory."""
     if os.name == 'nt':
         import ctypes
@@ -49,6 +50,98 @@ def data_guard(data_dir: Path):
                 yield
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _process_alive(pid):
+    if type(pid) is not int or pid < 1:return True
+    if os.name == 'nt':
+        import ctypes
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.OpenProcess.argtypes=[ctypes.c_ulong,ctypes.c_bool,ctypes.c_ulong]
+        kernel.OpenProcess.restype=ctypes.c_void_p
+        kernel.WaitForSingleObject.argtypes=[ctypes.c_void_p,ctypes.c_ulong]
+        kernel.CloseHandle.argtypes=[ctypes.c_void_p]
+        handle=kernel.OpenProcess(0x100000,False,pid)
+        if not handle:return ctypes.get_last_error()!=87
+        try:return kernel.WaitForSingleObject(handle,0)!=0
+        finally:kernel.CloseHandle(handle)
+    try:os.kill(pid,0)
+    except ProcessLookupError:return False
+    except PermissionError:return True
+    return True
+
+
+def _owner_namespace():
+    try:namespace=os.readlink('/proc/self/ns/pid')
+    except OSError:namespace=os.name
+    machine=''
+    try:
+        if os.name=='nt':
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,r'SOFTWARE\Microsoft\Cryptography') as key:
+                machine=str(winreg.QueryValueEx(key,'MachineGuid')[0])
+        else:
+            for location in ('/etc/machine-id','/proc/sys/kernel/random/boot_id'):
+                if Path(location).is_file():
+                    machine=Path(location).read_text().strip()
+                    if machine:break
+    except OSError:pass
+    host=hashlib.sha256((socket.gethostname()+'|'+os.name+'|'+machine).encode()).hexdigest()
+    return host,namespace
+
+
+@contextmanager
+def _owner_file(data_dir):
+    """Atomic shared-file ownership also covers different PID namespaces.
+
+    A foreign namespace's stale marker cannot safely be reclaimed by checking a
+    local PID. Refuse it until the host administrator verifies all writers exited.
+    """
+    from .filesystem import is_link
+    path=Path(data_dir)/'.instance-owner.json'
+    host,namespace=_owner_namespace()
+    token=secrets.token_hex(16)
+    record={'version':1,'host':host,'namespace':namespace,'pid':os.getpid(),'token':token}
+    for _ in range(2):
+        try:
+            descriptor=os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|getattr(os,'O_NOFOLLOW',0),0o600)
+        except FileExistsError:
+            try:
+                if is_link(path) or path.stat().st_size>4096:raise ValueError()
+                raw=path.read_bytes();previous=json.loads(raw)
+                if previous.get('version')!=1:raise ValueError()
+                if previous.get('host')!=host or previous.get('namespace')!=namespace:
+                    raise OSError('数据目录有其他主机或容器的占用记录，已拒绝启动。请先停止所有使用此目录的实例；确认已退出后才能删除 .instance-owner.json。')
+                if _process_alive(previous.get('pid')):
+                    raise OSError('已有 mikubot 写入进程正在使用此数据目录，已拒绝重复启动。')
+                if is_link(path) or path.read_bytes()!=raw:raise OSError('数据目录占用记录已变化，请稍后重试。')
+                path.unlink()
+            except (ValueError,TypeError,KeyError,AttributeError) as exc:
+                raise OSError('数据目录占用记录无法核对，已拒绝启动。确认所有实例已退出后再移除 .instance-owner.json。') from exc
+            continue
+        else:
+            try:
+                with os.fdopen(descriptor,'w',encoding='utf-8') as stream:
+                    json.dump(record,stream);stream.flush();os.fsync(stream.fileno())
+            except BaseException:
+                path.unlink(missing_ok=True)
+                raise
+            break
+    else:raise OSError('数据目录占用记录持续变化，已拒绝启动。')
+    try:yield
+    finally:
+        try:
+            if not is_link(path) and path.stat().st_size<=4096 and json.loads(path.read_bytes()).get('token')==token:path.unlink()
+        except (OSError,ValueError,TypeError):pass
+
+
+@contextmanager
+def data_guard(data_dir: Path):
+    """One writer per resolved directory across desktop, headless and containers."""
+    directory=Path(data_dir).resolve()
+    directory.mkdir(parents=True,exist_ok=True)
+    with _system_data_guard(directory),_owner_file(directory):
+        yield
 
 
 class ActivationServer:

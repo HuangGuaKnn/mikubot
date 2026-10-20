@@ -1,10 +1,12 @@
-"""Deprecated import compatibility; all implementation lives in mikubot."""
+"""Deprecated compatibility, scheduled for removal in 0.3.0; use mikubot."""
 import importlib
 import importlib.abc
 import importlib.util
 import sys
 
 from mikubot import __version__
+
+REMOVAL_VERSION = '0.3.0'
 
 
 class _AliasLoader(importlib.abc.Loader):

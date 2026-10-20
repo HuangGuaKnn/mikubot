@@ -22,6 +22,10 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync(path.join(__dirname,'.
   assert.equal(calls.at(-1).url,'/api/updates/check');assert.equal(calls.at(-1).options.body.include_prerelease,false);
   assert.ok(node.innerHTML.includes('&lt;script&gt;') && node.innerHTML.includes('&lt;img'));
   assert.ok(!node.innerHTML.includes('<script>') && !node.innerHTML.includes('<img'));
+  assert.match(node.innerHTML,/data-action="update-apply"/);
+  const applyBefore=calls.length;await ui.handleAction('update-apply',{});
+  assert.equal(calls.length,applyBefore,'automatic update still waits for explicit product confirmation');
+  await confirm.callback();assert.equal(calls.at(-1).url,'/api/updates/apply');assert.equal(calls.at(-1).options.body.release_id,12);
   await ui.handleChange({name:'update-kind',value:'source'});
   await ui.handleAction('update-download',{});
   assert.equal(calls.at(-1).options.body.kind,'source');assert.equal(calls.at(-1).options.body.release_id,12);

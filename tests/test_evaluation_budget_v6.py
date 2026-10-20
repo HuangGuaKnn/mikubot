@@ -86,7 +86,7 @@ async def test_failed_unknown_request_usage_is_retained_and_limits_remaining_cas
     sent = mock_transport(monkeypatch, timeout_first=True)
     report = await replay(cases(), config=cfg, live=True, generate=True)
     first = report['records'][0]
-    assert first['error'] == 'ProviderError' and first['usage_unconfirmed']
+    assert first['error'] == 'ProviderTimeoutError' and first['usage_unconfirmed']
     assert first['usage']['tokens'] > 0
     assert report['summary']['tokens'] == sum(x['usage']['tokens'] for x in report['records'])
     assert report['summary']['tokens'] <= 5000

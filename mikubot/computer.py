@@ -59,7 +59,7 @@ class ComputerService:
     def allowed(self, identity, scope_id):
         cfg = self.settings.get()
         computer = cfg.get('computer', {})
-        if (cfg.get('paused') or not computer.get('enabled') or computer.get('runtime') not in ('local','docker')
+        if (getattr(self.provider, '_updating', False) or cfg.get('paused') or not computer.get('enabled') or computer.get('runtime') not in ('local','docker')
                 or not self.access.is_admin(identity)):
             return False
         try:
@@ -297,7 +297,7 @@ class ComputerService:
             value = args['command' if name == 'execute_shell' else 'code']
             await self.authorize(ctx, '运行本机命令' if name == 'execute_shell' else '运行本机 Python',
                 {'tool': name, 'content': value, 'workspace': str(root),
-                 'notice': 'Docker隔离执行，默认断网，仅映射所选工作目录。' if self.settings.get()['computer']['runtime']=='docker'
+                 'notice': 'Docker 沙箱隔离主机系统，不保护工作目录内的文件；/workspace 是可写映射，脚本可在其中增删文件。默认断网。' if self.settings.get()['computer']['runtime']=='docker'
                  else '使用当前系统账户的本机权限，工作目录不是隔离沙箱。请核对命令和文件影响范围。'})
             ctx.check()
             worker = asyncio.create_task(asyncio.to_thread(self._process, ctx, root, name, value))

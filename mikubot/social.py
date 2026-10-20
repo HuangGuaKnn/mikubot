@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 
 from .settings import resolve_model, resolved_identity
 from .output import OutputLimitError, output_config, split_output
+from .provider import ProviderTimeoutError, ProviderConnectionError, ProviderRateLimitError, is_budget_exceeded
+from .timezones import local_now
 
 
 def _value(scope, key, default=None):
@@ -21,11 +23,11 @@ def _words(text):
     return set(re.findall(r'[a-z0-9_]+|[\u3400-\u9fff]', str(text).casefold()))
 
 
-def _quiet(scope):
+def _quiet(scope, settings=None):
     start, end = _value(scope, 'quiet_start', ''), _value(scope, 'quiet_end', '')
     if not start or not end:
         return False
-    current = datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M')
+    current = local_now(settings).strftime('%H:%M')
     return start <= current < end if start < end else current >= start or current < end
 
 
@@ -37,8 +39,19 @@ def _failure_feedback(exc, *, planner=False):
     # Never relay provider URLs, credentials, remote response bodies or tracebacks.
     if isinstance(exc, OutputLimitError):
         return '这次内容里有超过发送长度上限的完整链接或代码，原文已保留在本地对话记录。'
-    if any(word in str(exc) for word in ('预算', '额度', '次数已达')):
+    if isinstance(exc, ProviderTimeoutError):
+        return '这次回复等待模型响应超时，请稍后再试；也可以在模型参数中调整等待超时。'
+    if isinstance(exc, ProviderConnectionError):
+        return '这次回复与模型服务的连接失败或中断，请检查网络或稍后再试。'
+    if isinstance(exc, ProviderRateLimitError):
+        return '模型服务暂时限流或额度受限，请检查服务商用量或稍后再试。'
+    if is_budget_exceeded(exc):
         return '今天的对话预算或次数已不足，请调整设置或稍后再试。'
+    text = str(exc).casefold()
+    if any(word in text for word in ('响应超时', '连接超时', 'timed out', 'timeout')):
+        return '这次回复等待模型响应超时，请稍后再试；也可以在模型参数中调整等待超时。'
+    if '连接中断' in text:
+        return '这次回复与模型服务的连接失败或中断，请检查网络或稍后再试。'
     return '这次没能完成回复判断，请检查本地模型、预算与运行日志后再试。' if planner else '这次回复没能完成，请检查本地模型、预算与运行日志后再试。'
 
 
@@ -351,7 +364,7 @@ class SocialEngine:
         if not explicit and not private and not replacement:
             if not identity['proactive_reply']:
                 return decide('skip', '当前对话主动接话已关闭')
-            if _quiet(scope) or _value(scope, 'activity', 'balanced') == 'quiet':
+            if _quiet(scope, self.settings) or _value(scope, 'activity', 'balanced') == 'quiet':
                 return decide('skip', '静默时段或安静模式')
             cooldown = max(0, float(_value(scope, 'cooldown_seconds', 20)))
             if not self._followup(scope, user_id, topic) and time.monotonic() - self._last_reply.get(scope_id, -float('inf')) < cooldown:
@@ -427,7 +440,7 @@ class SocialEngine:
                     and (not self.knowledge_current_fn or self.knowledge_current_fn(scope_id, user_id, overview))
                     and (not fresh or time.monotonic() - started <= min(planner_options['max_age_ms'], self._planner_options(current_scope)['max_age_ms']) / 1000)
                     and _value(current_scope, 'activity', 'balanced') == activity
-                    and (explicit or private or (not _quiet(current_scope) and _value(current_scope, 'activity', 'balanced') != 'quiet')))
+                    and (explicit or private or (not _quiet(current_scope, self.settings) and _value(current_scope, 'activity', 'balanced') != 'quiet')))
         try:
             response = await self._call_model([
                 {'role': 'system', 'content': '你是聊天参与规划器，先判断最新消息在对谁说、对方想表达什么、你是否有值得提供的回应，再决定本轮reply或skip。'
@@ -781,7 +794,7 @@ class ConversationFlow:
             discarded['ready'].set()
         if (not batched and pending is None and ':group:' in scope_id and not explicit and not _interrupt(text)
                 and not (key in social._open_requests and _replacement(text))
-                and identity['plan_enabled'] and identity['proactive_reply'] and not _quiet(scope)
+                and identity['plan_enabled'] and identity['proactive_reply'] and not _quiet(scope, self.settings)
                 and _value(scope,'activity','balanced')!='quiet' and planner_cfg.get('group_batch_ms',1500)>0):
             if time.monotonic()-social._last_gate.get(scope_id,-float('inf')) < social._planner_options(scope)['min_interval_ms']/1000:
                 social._decision(scope_id,str(user_id),message,'skip','Planner 主动判断间隔内，本轮仅观察',explicit=False)
@@ -909,7 +922,7 @@ class ConversationFlow:
                 return False
         if not batch['explicit']:
             identity = resolved_identity(self.settings.get(), scope)
-            if not identity['plan_enabled'] or not identity['proactive_reply'] or _quiet(scope) or _value(scope, 'activity', 'balanced') == 'quiet':
+            if not identity['plan_enabled'] or not identity['proactive_reply'] or _quiet(scope, self.settings) or _value(scope, 'activity', 'balanced') == 'quiet':
                 return False
             topic = _topic(' '.join(x['text'] for x in batch['entries']))
             if (not batch.get('output_started') and not social._followup(scope, user_id, topic)

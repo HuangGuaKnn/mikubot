@@ -77,6 +77,8 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
     app.state.store, app.state.settings, app.state.chat = store, settings, chat
     app.state.provider, app.state.bridge, app.state.scheduler = provider, router, scheduler
     app.state.onebot, app.state.official = onebot, official
+    from .statistics import install_statistics
+    install_statistics(app,store,settings,onebot,official)
     app.state.shutdown = None
     from .auth_api import install_auth, local_peer, token_matches
     auth_http = install_auth(app, settings, data_dir, allow_remote=allow_remote)
@@ -102,6 +104,8 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
 
     from .experience_api import install_experience
     install_experience(app, store, settings, provider, chat, router, data_dir, reconnect)
+    from .plugins import install_plugins
+    install_plugins(app, data_dir, chat)
     from .updates import install_updates
     install_updates(app, data_dir)
 
@@ -142,6 +146,8 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
                         return JSONResponse({'detail': '请求体超过大小限制'}, status_code=413)
                 request._body = bytes(raw)
         is_api = request.url.path.startswith('/api/')
+        if is_api and getattr(provider, '_updating', False) and request.method != 'GET':
+            return JSONResponse({'detail': '正在退出并安装更新，请等待软件重新打开'}, status_code=503)
         exclusive = request.url.path == '/api/backup/restore'
         if is_api:
             async with request_gate:
@@ -305,7 +311,7 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         cfg = resolve_model(config, model_id=provider_id or 'default')
         if not cfg.get('enabled', True):
             raise ValueError('模型或供应商已停用，请先检查模型供应商配置')
-        for key in ('base_url', 'model', 'api_key', 'vision', 'temperature'):
+        for key in ('base_url', 'model', 'api_key', 'vision', 'temperature', 'timeout_seconds'):
             if key in payload and payload[key] not in ('', None):
                 cfg[key] = payload[key]
         started = time.monotonic()

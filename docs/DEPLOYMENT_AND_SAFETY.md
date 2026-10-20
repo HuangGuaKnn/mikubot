@@ -1,6 +1,6 @@
 # 本地改进：部署、隔离与验收
 
-本文描述0.1.2。正式桌面目标为Windows；Linux核心的Python3.11–3.13回归、Docker镜像构建和隔离探针此前0.1.1已在[GitHub Actions](https://github.com/iownmmiku/mikubot/actions/runs/39226282587)通过。本机Windows家庭版仍未运行Docker，真实QQ、长期服务器部署与公网证书需按目标环境验收。
+本文描述0.1.3。正式桌面目标为Windows；Linux核心的Python3.11–3.13回归、Docker镜像构建和隔离探针此前0.1.1已在[GitHub Actions](https://github.com/iownmmiku/mikubot/actions/runs/39226282587)通过。本机Windows家庭版仍未运行Docker，真实QQ、长期服务器部署与公网证书需按目标环境验收。
 
 ## Python 与包入口
 
@@ -80,9 +80,9 @@ Host侧代理经Docker桥转发时，后端TCP对端可能不是127.0.0.1。经�
 
 ## 代码隔离与任务恢复
 
-新安装默认 `computer.runtime: docker`，电脑能力默认关闭；旧本机配置不强制迁移。先准备本机Docker Linux引擎，手动运行 `docker pull python:3.12-slim`，再点击“检查隔离环境”。不自动下载镜像、不连接远程Docker、不降级到宿主执行。
+新安装默认 `computer.runtime: docker`，电脑能力默认关闭；旧本机配置不强制迁移。先准备本机Docker Linux引擎，手动运行 `docker pull docker.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1`，再点击“检查隔离环境”。不自动下载镜像、不连接远程Docker、不降级到宿主执行。
 
-内置Shell/Python容器仅挂载专用工作目录和本次只读脚本，断网、只读系统、非root、移除capabilities、禁止新权限，限制512MB内存、1CPU和64进程。拒绝工作目录中的链接/联接、磁盘根目录和管理数据目录。Shell是POSIX，不能直接运行宿主Windows GUI；容器隔离仍依赖宿主内核和引擎安全。
+Docker 沙箱隔离主机系统，不保护工作目录内的文件；/workspace 是可写映射，脚本可在其中增删文件。内置Shell/Python容器仅挂载专用工作目录和本次只读脚本，断网、只读系统、非root、移除capabilities、禁止新权限，限制512MB内存、1CPU和64进程。拒绝工作目录中的链接/联接、磁盘根目录和管理数据目录。Shell是POSIX，不能直接运行宿主Windows GUI；容器隔离仍依赖宿主内核和引擎安全。
 
 本机模式明确使用当前系统账户权限，工作目录不是Shell/Python隔离边界。文件工具由宿主执行且有路径约束；MCP服务不受该容器隔离。电脑能力开启且选择Docker时，默认禁止MCP调用（包括已在等待审批的动作）；确有需要须在高级设置开启“允许沙箱外MCP工具”或配置`computer.allow_external_tools: true`，仍受管理员、会话与允许列表检查。本机模式保留原有调用流程。自动执行仅对真实管理员生效。逐步审批支持原会话“同意/拒绝”，同一发起者、唯一待审批动作、5分钟有效；有歧义时仍要求编号和审批码。
 
@@ -101,3 +101,10 @@ Docker脚本真实检查宿主文件不可见、根目录只读、网络不可�
 真实QQ验收脚本不改配置、不代发消息，由用户在观察窗口发送测试消息。报告只留诊断代码与计数，登录密码交互输入，Cookie不落盘。加 `--test-model` 才允许一次真实模型调用，可能计费。未观察到平台发送回执标记inconclusive；平台回执不等于用户已阅读。
 
 真实本地TCP回归覆盖429、坏格式、流中断、超时、错误Token和WebSocket断开重连，仍非真实QQ账号或付费模型验收。`.github/workflows/ci.yml` 已在上述代码提交上完成Windows/Linux、Python3.11–3.13和Docker验收；对应结果不扩大为真实QQ或全部部署环境均通过。
+
+
+## 0.1.3：镜像摘要与共享数据目录
+
+沙箱引用固定 `docker.io/library/python:3.12-slim@sha256:...`，2026-10-20从Docker Hub官方library/python的OCI索引核验并固定。实际使用 `mikubot/sandbox.py` 的 `IMAGE`，环境检查要求本地RepoDigests匹配；同名标签不是通过依据。更新摘要需维护者重新核验官方索引、在隔离环境跑 `check_docker_isolation.py --require`，再同步CI和文档，不在用户启动时自动跟随最新标签。这是内容固定，不是独立镜像签名验证。
+
+数据目录增加 `.instance-owner.json`，配合OS锁防止桌面、后台、跨宿主或容器命名空间同时写入。正常退出移除自己的标记；同宿主/命名空间的PID可证明已退出时自动回收。外来命名空间或损坏记录无法证明已退出，拒绝启动。必须先停止所有实例、核对占用，再手动删除此标记；不能通过删锁运行第二个写入者。不支持共享SQLite集群或网络文件系统的多写入者。

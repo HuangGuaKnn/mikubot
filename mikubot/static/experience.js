@@ -11,71 +11,19 @@ window.MikubotExperience = (() => {
   const jobId = value => String(unwrapJob(value)?.id || "");
   const safeLink = value => /^(https?:\/\/|\/(?!\/))/i.test(String(value || "")) ? String(value) : "";
   const safeId = id => encodeURIComponent(String(id || ""));
+  const _pageRuntime={get liveSource(){return liveSource},set liveSource(value){liveSource=value},get watchedJob(){return watchedJob},set watchedJob(value){watchedJob=value},get renderedPage(){return renderedPage},set renderedPage(value){renderedPage=value},get pairTimer(){return pairTimer},set pairTimer(value){pairTimer=value},get attachments(){return attachments},set attachments(value){attachments=value},get attachmentScope(){return attachmentScope},set attachmentScope(value){attachmentScope=value},get distillDraft(){return distillDraft},set distillDraft(value){distillDraft=value},get currentJob(){return currentJob},set currentJob(value){currentJob=value},get pair(){return pair},set pair(value){pair=value}};
+  const {renderChat,sessionSidebar,attachmentChips,sendChat}=window.MikubotExperienceChat.create(_pageRuntime,{inactive,jobDetail:(...args)=>jobDetail(...args)});
+  const {jobDetail,renderJobs}=window.MikubotExperienceJobs.create(_pageRuntime,{jobNames,inactive,safeId,safeLink});
+  const {renderSettings,localConnectorPanel,schedulerPanel,pollPairing}=window.MikubotExperienceConfig.create(_pageRuntime,{safeId});
+  const {distillChooser,characterForm,generateForm,profilePanel,profileForm,profileBindForm,corpusForm,showDistillPreview}=window.MikubotExperiencePersona.create(_pageRuntime,{safeLink});
+  const {markdown,renderHelp,renderOverview}=window.MikubotExperienceHelp.create(_pageRuntime,{safeLink});
+
   function costLabel(record = {}) {
     const configured = configuredModel();
     const known = record.cost_known === true || record.price_configured === true || Number(record.cost) > 0 || Number(configured.input_price) > 0 || Number(configured.output_price) > 0;
     return record.cost_known === false || !known ? "费用未知" : `¥ ${Number(record.cost || 0).toFixed(4)}`;
   }
 
-  async function renderOverview() {
-    const diagnostics = await api(`/api/diagnostics?${query({scope_id:state.scope})}`), model = configuredModel(), qq = diagnostics.qq || state.boot?.qq || {};
-    const connected = qq.status?.connected || qq.connected;
-    return heading("MIKUBOT","机器人管理","先完成一次聊天，再按需要接入 QQ、创建人格和开启电脑任务。",button("开始聊天","go-chat","primary","chat")) + `<section class="home-intro"><div class="home-identity"><div class="miku-mark" aria-hidden="true">m<span>♪</span></div><div><h2>${e(state.settings.identity?.name || "初音未来")}，已就绪。</h2><p>陪你聊天，记住值得记住的事，也能在你的授权下完成任务。默认人格是初音未来，配置随时可以调整。</p></div></div>${button("使用指南","go-help","","arrow")}</section><div class="status-cards">${[
-      ["spark","语言模型",diagnostics.model?.configured ? "已配置" : "等待连接",model.model || "填入自己的服务地址和密钥，就能开始自然聊天。","quick-model","配置模型"],
-      ["groups","QQ 连接",connected ? "已连接" : qq.enabled ? "正在等待连接" : "尚未启用","本机 NapCat、SnowLuma 支持自动配对，也可以使用 QQ 官方机器人。","local-qq","连接 QQ"],
-      ["tools","电脑任务",state.settings.computer?.enabled ? "已开启" : "尚未开启","仅已认证的本地账户和你指定的 QQ 管理员可以发动。","computer-settings","管理权限"]
-    ].map(([symbol,title,status,description,action,actionText]) => `<article class="status-card"><h3>${icon(symbol)}${e(title)}</h3><strong>${e(status)}</strong><p>${e(description)}</p>${button(actionText,action,"small")}</article>`).join("")}</div>${window.MikubotQuickStart.diagnosticsPanel(diagnostics)}<section class="panel" style="margin-top:20px"><div class="panel-head"><div><h2>按需要，逐步添加能力</h2><p>模型分工、自动学习与群聊规划都可以稍后设置。</p></div></div><div class="panel-body"><div class="distill-options"><button class="distill-option" data-action="start-distill">${icon("persona")}<strong>蒸馏一个人格</strong><small>从作品角色或你的 ZIP 语料中提炼人格，先预览与试聊，再应用。</small></button><button class="distill-option" data-page="jobs">${icon("tasks")}<strong>查看后台任务</strong><small>蒸馏、电脑任务的执行步骤、审批与结果，关闭网页后也能回来查看。</small></button></div></div></section>`;
-  }
-
-  function sessionSidebar() {
-    const web = state.scopes.filter(item => item.id.startsWith("web:")), qq = state.scopes.filter(item => !item.id.startsWith("web:"));
-    const row = item => `<button class="conversation-item ${item.id === state.scope ? "active" : ""}" data-action="scope-chat" data-id="${e(item.id)}" title="${e(item.name)}">${icon(item.id.startsWith("web:") ? "chat" : "groups")}<span>${e(item.name || "新对话")}</span></button>`;
-    return `<aside class="conversations" aria-label="聊天会话">${button("新对话","new-chat","small","plus")}<p class="conversation-label">本地对话</p>${web.map(row).join("")}${qq.length ? `<p class="conversation-label">QQ 记录 · 只读</p>${qq.map(row).join("")}` : ""}</aside>`;
-  }
-
-  async function renderChat() {
-    const [messages,jobs,runs,modelControl] = await Promise.all([api(`/api/messages?${query({scope_id:state.scope})}`),api(`/api/jobs?${query({scope_id:state.scope})}`),api(`/api/tool-runs?${query({scope_id:state.scope,status:"pending"})}`),window.MikubotPages ? window.MikubotPages.chatModelControl() : ""]);
-    state.messages = rows(messages); state.liveJobs = rows(jobs); state.toolRuns = rows(runs);
-    const local = state.scope.startsWith("web:"), job = state.liveJobs.find(item => !inactive(item));
-    if (attachmentScope !== state.scope) { attachments = []; attachmentScope = state.scope; }
-    const pending = state.toolRuns.filter(item => item.status === "pending" && !item.read_only);
-    return heading("CHAT","聊天","本地聊天默认每条回应。电脑任务需要管理员身份与独立开关。",button("后台任务","go-jobs","","tasks")) + (state.boot?.setup_required ? notice("尚未连接语言模型。你可以先使用记事、待办、计算和基础检索。","warning","quick-model","连接模型") : "") + `<div class="chat-workspace">${sessionSidebar()}<section class="chat-layout"><header class="chat-top"><div class="chat-identity"><div class="chat-avatar">ミ</div><div><h3>${e(personaName(scope().persona_id))}</h3><p>${e(scope().name)} · ${local ? "管理台管理员 mikubot" : "QQ 历史记录"}</p></div></div><div class="inline-stack">${modelControl}${button("人格","go-persona","ghost small","persona")}${button("清空","clear-messages","ghost small","trash")}</div></header>${!local ? '<div class="chat-scope-note scope-warning">QQ 记录在此只读。点击“新对话”即可在本地聊天，不会向 QQ 发信。</div>' : ""}<div class="chat-feed" id="chat-feed">${state.messages.length ? state.messages.map(renderMessage).join("") : `<div class="empty-state"><div class="chat-welcome-glyph">♪</div><h3>今天想聊什么？</h3><p>说说近况，放入一份资料，或交给我一件事情。</p>${local ? '<div class="chat-suggestions"><button data-action="chat-suggestion" data-text="你好，介绍一下你自己吧">认识初音未来</button><button data-action="chat-suggestion" data-text="记住：我喜欢喝抹茶">记住我的偏好</button><button data-action="chat-suggestion" data-text="添加待办：周末整理文档">添加待办</button></div>' : ""}</div>`}${state.sending ? '<div class="pending-message"><span class="spinner small"></span>正在处理你的消息…</div>' : ""}<div id="live-job-detail">${job ? jobDetail(job,true) : ""}</div></div>${pending.length ? `<section class="jobs-mini" aria-label="等待审批的工具请求"><strong>有 ${pending.length} 项工具请求等待确认</strong>${pending.map(toolRunCard).join("")}</section>` : ""}<form class="chat-composer" data-form="chat"><div class="image-previews" id="image-previews"></div><div id="attachment-chips" class="attachment-chips">${attachmentChips()}</div><textarea id="chat-text" name="text" placeholder="${local ? (state.chatMode === "computer" ? "例如：整理这份文档，或运行项目并帮我找出错误…" : "发消息，或把想完成的事交给我…") : "点击“新对话”开始本地聊天"}" aria-label="发送消息" rows="2" ${!local || state.sending ? "disabled" : ""}>${e(state.draft)}</textarea><div class="composer-bottom"><div class="composer-tools"><button class="icon-button" type="button" data-action="attach-image" title="添加图片" aria-label="添加图片" ${!local || state.sending ? "disabled" : ""}>${icon("image")}</button><button class="icon-button" type="button" data-action="attachment-options" title="上传资料" aria-label="上传资料" ${!local || state.sending ? "disabled" : ""}>${icon("file")}</button><label class="mode-picker">模式<select id="chat-mode" aria-label="聊天模式" ${!local || state.sending ? "disabled" : ""}><option value="chat" ${state.chatMode !== "computer" ? "selected" : ""}>普通聊天</option><option value="computer" ${state.chatMode === "computer" ? "selected" : ""}>电脑任务</option></select></label><span class="composer-hint">Enter 发送 · Shift + Enter 换行</span></div>${state.sending ? button("停止等待","cancel-chat","small","stop") : `<button type="submit" class="btn primary" ${!local ? "disabled" : ""}>发送 ${icon("send")}</button>`}</div></form></section></div><p class="help-caption">上传资料先选择用途。开启电脑任务后，管理员明确提出的任务会自动执行，可随时在任务卡片停止；普通 QQ 用户不能发起。</p>`;
-  }
-
-  function attachmentChips() { return attachments.map((item,index) => `<span class="attachment-chip">${icon("file")}${e(item.name || item.filename || "资料")}<small>本次参考</small><button type="button" data-action="remove-attachment" data-index="${index}" aria-label="移除附件">×</button></span>`).join(""); }
-
-  async function sendChat() {
-    if (state.sending || !state.scope.startsWith("web:")) return;
-    const text = $("#chat-text")?.value.trim() || "";
-    if (!text && !state.images.length && !attachments.length) return;
-    const scopeId = state.scope, payload = {scope_id:scopeId,text,images:state.images.map(item => item.data),attachments:attachments.map(item => item.id),mode:state.chatMode || "chat"};
-    state.draft = text; state.sending = true; state.controller = new AbortController(); const controller = state.controller;
-    await renderPage();
-    try {
-      const result = await api("/api/chat",{method:"POST",body:payload,signal:controller.signal});
-      if (state.scope === scopeId) { state.draft = ""; state.images = []; attachments = []; }
-      if (result.job) toast("电脑任务已创建，执行进度与结果会显示在当前聊天，可随时停止。");
-      else if (result.pending_actions?.length) toast(`有 ${result.pending_actions.length} 项工具请求等待你确认。`);
-    } catch (error) { toast(error.name === "AbortError" ? "已停止等待。后台任务请在任务页查看并停止。" : error.message,error.name !== "AbortError"); }
-    finally { state.sending = false; state.controller = null; await bootstrap(); $("#chat-text")?.focus(); }
-  }
-
-  function jobDetail(job,compact = false) {
-    const approval = job.approval, result = job.result || {}, events = Array.isArray(job.events) ? job.events : [];
-    const eventHTML = item => {
-      const data = item.data && typeof item.data === "object" ? item.data : item;
-      const names = {started:"开始处理",progress:"处理进度",authorized:"按已开启权限执行",approval:"等待审批",approved:"已批准",tool_result:"操作结果",completed:"完成",stopped:"已停止",failed:"处理失败"};
-      const output = data.output ?? data.content ?? data.result;
-      const text = typeof output === "string" ? output : output == null ? "" : toolJSON(output,10000);
-      return `<div class="job-step"><strong>${e(data.stage || names[item.type] || item.type || "进度")}</strong> ${e(data.message || data.summary || data.tool || "")}${text ? `<pre>${e(String(text).slice(0,10000))}</pre>` : ""}</div>`;
-    };
-    return `<article class="${compact ? "chat-inline-progress" : "record-card job-card"}" data-job-id="${e(job.id)}"><div class="record-card-head"><div><h3>${e(job.title || (job.kind === "distillation" ? "人格蒸馏" : "电脑任务"))}</h3><p class="help-caption">${e(job.stage || "")} ${job.message ? "· " + e(job.message) : ""}</p></div>${tag(jobNames[job.status] || job.status,job.status === "awaiting_approval" ? "gold" : job.status === "failed" ? "red" : "gray")}</div>${job.error ? notice(job.error,"danger") : ""}${result.warnings?.length ? notice(result.warnings.join("；"),"warning") : ""}${approval && job.status === "awaiting_approval" ? `<div class="notice warning">${icon("shield")}<p>${e(approval.summary || "下一步需要你的确认")}</p></div><pre class="tool-argument-preview">${e(toolJSON(approval.details || {},4000))}</pre>${button("查看并批准本次动作","job-approve","primary small","shield",`data-id="${e(job.id)}" data-approval="${e(approval.id)}"`)}` : ""}${events.length && !compact ? `<details class="details" ${!inactive(job) ? "open" : ""}><summary>执行记录（${events.length}）</summary>${events.slice(-30).map(eventHTML).join("")}</details>` : ""}${result.reply || result.summary ? `<p class="record-text">${e(result.reply || result.summary)}</p>` : ""}${result.persona || result.system_prompt || result.persona_text || result.personality || result.prompt ? `<div class="persona-draft">${e(result.persona?.system_prompt || result.system_prompt || result.persona_text || result.personality || result.prompt)}</div>` : ""}<div class="record-actions">${!inactive(job) ? button("停止任务","job-cancel","ghost small","stop",`data-id="${e(job.id)}"`) : ""}${job.resumable ? button("从检查点继续","job-resume","small","refresh",`data-id="${e(job.id)}"`) : ""}${compact ? button("查看完整任务","view-job","ghost small","arrow",`data-id="${e(job.id)}"`) : ""}${job.kind === "distillation" && job.status === "completed" ? button("试聊人格草稿","trial-persona","small","chat",`data-id="${e(job.id)}"`) + button("保存为人格副本","apply-distill","primary small","persona",`data-id="${e(job.id)}"`) + (result.artifact || result.skill_available ? `<a class="btn small" href="/api/persona/distill/${safeId(job.id)}/artifact" download>下载 Skill 包</a>` : "") : ""}${(result.files || result.artifacts || []).map(file => { const url = safeLink(file.url || file.download_url); return url ? `<a class="job-file-link" href="${e(url)}" download>${icon("file")}${e(file.name || "下载结果")}</a>` : ""; }).join("")}</div><p class="help-caption">${e(fmt(job.updated_at || job.created_at,true))}${job.id ? " · 任务 " + e(job.id) : ""}</p></article>`;
-  }
-
-  async function renderJobs() {
-    const jobs = rows(await api("/api/jobs")); state.liveJobs = jobs;
-    return heading("TASKS","后台任务","查看执行步骤与实际结果，正在运行的任务可随时停止。",button("刷新任务","refresh","","refresh")) + (jobs.length ? `<div id="jobs-list">${jobs.map(job => jobDetail(job)).join("")}</div>` : empty("tasks","还没有后台任务","在聊天中选择“电脑任务”，或在人格页开始一次蒸馏。","go-chat","开始聊天"));
-  }
 
   function watch(job) {
     if (!job || inactive(job)) { closeStream(); return; }
@@ -105,96 +53,9 @@ window.MikubotExperience = (() => {
   }
   async function refreshMessages() { state.messages = rows(await api(`/api/messages?${query({scope_id:state.scope})}`)); const feed = $("#chat-feed"); if (feed) { const detail = $("#live-job-detail")?.outerHTML || '<div id="live-job-detail"></div>'; feed.innerHTML = state.messages.map(renderMessage).join("") + detail; feed.scrollTop = feed.scrollHeight; } }
 
-  async function renderSettings() {
-    const [base,admins,security] = await Promise.all([window.MikubotExperience.baseSettings(),api("/api/admins"),window.MikubotAuth ? window.MikubotAuth.settingsPanel() : ""]);
-    state.admins = rows(admins); const computer = state.settings.computer || {};
-    const adminPanel = `<section class="panel settings-section section-anchor" id="admins-section"><div class="section-title">${icon("shield")}<div><h2>管理员账号</h2><p>谁可以在对话中发动电脑任务与管理操作。</p></div></div><div class="admin-row"><div><strong>mikubot ${tag("内置管理台管理员")}</strong><small>通过桌面或浏览器认证的管理台账户，始终保留。</small></div></div>${state.admins.filter(item => item.platform !== "local" && item.id !== "mikubot").map(item => `<div class="admin-row"><div><strong>${e(item.label || item.name || "QQ 管理员")}</strong><small>${e(item.platform || "qq")} · ${e(item.user_id || item.account_id || "")}${item.instance_id ? " · " + e(item.instance_id) : ""}</small></div>${button("移除","remove-admin","ghost small","trash",`data-id="${e(item.id)}"`)}</div>`).join("")}<div class="section-actions">${button("60秒快速配对","pair-admin-auto","primary","link")}${button("手动核对配对","pair-admin","","link")}${button("手动添加账号","new-admin","","plus")}</div><p class="help-caption">使用真实发送者 ID 判断权限，昵称、群主身份、转发及引用不授予权限。允许聊天名单在 QQ 连接中单独设置。</p></section>`;
-    const computerPanel = `<section class="panel settings-section section-anchor" id="computer-section"><div class="section-title">${icon("tools")}<div><h2>电脑任务</h2><p>本机命令、Python 与文件操作；任务步骤与运行结果保存在聊天中。</p></div></div>${notice("本机模式使用当前系统账户权限，工作目录不是沙箱。Docker 模式在本机 Linux 容器中断网运行代码，仅映射选定工作目录；需要先准备 Docker 与镜像，不可用时停止，不会降级为本机执行。Docker 隔离开启时默认禁止沙箱外 MCP 工具，可在高级设置明确放行。管理员任务按所选审批方式执行。","warning")}<form data-form="computer-settings">${toggle("enabled","开启电脑任务","仅管理员可发起，按下方执行环境与确认方式运行；可随时停止。",computer.enabled)}<div class="form-grid" style="margin-top:15px">${select("runtime","执行环境",[["local","本机账户权限"],["docker","Docker 隔离执行（默认断网）"]],computer.runtime || "docker","data-full")}${field("workspace","工作目录",computer.workspace || "","text","请填写已有的绝对路径；留空使用数据目录下的 workspace。文件工具限制在此目录；仅本机模式的 Shell 与 Python 使用本机账户权限。","data-full")}</div><details class="details"><summary>高级执行限制</summary><div class="form-grid" style="margin-top:12px">${toggle("allow_external_tools","允许沙箱外 MCP 工具","Docker 隔离时默认关闭。开启后 MCP 按服务自身权限运行，不受代码沙箱保护；其他管理员和服务允许列表仍有效。",computer.allow_external_tools)}${select("approval_mode","操作确认",[["automatic","自动执行（仅管理员）"],["per_action","每步确认"]],computer.approval_mode || "automatic")}${field("max_steps","每个任务最多步骤",computer.max_steps ?? 12,"number","达到上限后停止继续操作。","min=\"1\" max=\"100\"")}${field("timeout_seconds","单次操作超时（秒）",computer.timeout_seconds ?? 60,"number","较长任务可在记录中查看结果。","min=\"1\" max=\"600\"")}${field("max_output_chars","最多记录输出字符",computer.max_output_chars ?? 16000,"number","过长输出会限制展示。","min=\"1000\" max=\"100000\"")}</div></details><div class="section-actions"><button class="btn primary" type="submit">保存电脑任务设置</button>${button("检查隔离环境","runtime-check","","shield")}${button("打开任务聊天","computer-chat","","chat")}</div></form></section>`;
-    const updates = window.MikubotUpdates ? await window.MikubotUpdates.settingsPanel() : "";
-    return base.replace('<div class="settings-main">','<div class="settings-main">' + updates + security + adminPanel + computerPanel + schedulerPanel()).replace('<form data-form="qq">',localConnectorPanel() + (window.MikubotPages ? window.MikubotPages.qqIngress(state.boot?.qq) : "") + '<form data-form="qq">');
-  }
-
-  function localConnectorPanel() {
-    return `<div class="quick-connector-guide"><strong>连接本机 NapCat / SnowLuma</strong><p>连接器已安装并登录 QQ 后，可自动创建反向 WebSocket，保留其他连接配置。</p>${button("自动配对本机 QQ","local-qq","primary small","link")} ${button("连通性自检","qq-self-test","ghost small","shield")}</div>`;
-  }
-
-  async function pollPairing() {
-    if(!pair?.automatic || !$("#modal")?.open)return;
-    const id=pair.id, left=Math.max(0,Math.ceil(pair.expires_at-Date.now()/1000));
-    if(!left){$("#pairing-result").textContent="配对模式已结束，请重新开启。";return;}
-    try {
-      const result=await api(`/api/admins/pairing/${safeId(id)}`);
-      if(pair?.id!==id || !$("#modal")?.open)return;
-      if(result.status==='bound'){pair=null;closeModal();toast('QQ管理员已自动绑定，可在管理员列表撤销。');await bootstrap();return;}
-      $("#pairing-result").textContent=`剩余 ${left} 秒。用目标QQ私聊发送上方完整命令，持码账号将自动成为管理员。`;
-      pairTimer=setTimeout(pollPairing,1000);
-    } catch(error){const node=$("#pairing-result");if(node)node.textContent=error.message;}
-  }
-
-  function schedulerPanel() {
-    const cfg=state.settings.scheduler || {};
-    return `<section class="panel settings-section"><h2>并发与排队</h2><p class="help-caption">同一会话保持顺序；前台聊天优先于后台学习。服务商有限流时保持默认并发1。</p><form data-form="queue-settings"><div class="form-grid">${field('model_concurrency','每个模型并发数',cfg.model_concurrency ?? 1,'number','','min="1" max="8"')}${field('model_queue_limit','每个模型最多排队请求',cfg.model_queue_limit ?? 32,'number','','min="1" max="200"')}${field('background_queue_limit','后台学习排队上限',cfg.background_queue_limit ?? 16,'number','','min="1" max="100"')}${field('scope_queue_limit','每个会话排队上限',cfg.scope_queue_limit ?? 8,'number','','min="1" max="32"')}</div><button class="btn" type="submit">保存调度设置</button></form></section>`;
-  }
 
   // Small Markdown reader: raw HTML, remote images and script URLs remain text.
-  function markdown(text) {
-    const lines = String(text || "").split(/\r?\n/), result = [], toc = [];
-    let code = [], inCode = false, paragraph = [], list = false, count = 0;
-    const inline = value => e(value).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\[([^\]]+)\]\(([^\s)]+)\)/g,(all,title,url) => { const decoded = url.replaceAll("&amp;","&"); return safeLink(decoded) || /^#[a-zA-Z0-9_-]+$/.test(decoded) ? `<a href="${e(decoded)}" ${decoded.startsWith("http") ? 'target="_blank" rel="noopener noreferrer"' : ""}>${title}</a>` : title; });
-    const flush = () => { if (paragraph.length) result.push(`<p>${inline(paragraph.join("\n"))}</p>`); paragraph = []; if (list) result.push("</ul>"); list = false; };
-    for (const line of lines) {
-      if (/^```/.test(line)) { flush(); if (inCode) { result.push(`<pre>${e(code.join("\n"))}</pre>`); code=[]; } inCode = !inCode; continue; }
-      if (inCode) { code.push(line); continue; }
-      const headingMatch = /^(#{1,4})\s+(.+)$/.exec(line), bullet = /^\s*(?:[-*]|\d+\.)\s+(.+)$/.exec(line);
-      if (headingMatch) { flush(); const id = `guide-${++count}`, level = Math.max(2,Math.min(3,headingMatch[1].length)); result.push(`<h${level} id="${id}">${inline(headingMatch[2])}</h${level}>`); if (headingMatch[1].length <= 2) toc.push(`<a href="#${id}">${e(headingMatch[2])}</a>`); }
-      else if (bullet) { if (paragraph.length) { result.push(`<p>${inline(paragraph.join("\n"))}</p>`); paragraph=[]; } if (!list) { result.push("<ul>"); list=true; } result.push(`<li>${inline(bullet[1])}</li>`); }
-      else if (!line.trim()) flush(); else { if (list) { result.push("</ul>"); list=false; } paragraph.push(line); }
-    }
-    flush(); if (code.length) result.push(`<pre>${e(code.join("\n"))}</pre>`);
-    return `<nav class="guide-toc" aria-label="指南目录">${toc.join("")}</nav><article class="guide-document">${result.join("")}</article>`;
-  }
-  async function renderHelp() { const response = await api("/static/guide.md",{raw:true}), text = await response.text(); return heading("HELP","使用指南","从第一次聊天，到 QQ 连接、人格蒸馏、电脑任务和源码部署。",button("运行诊断","go-diagnostics","","shield")) + markdown(text); }
 
-  function distillChooser() {
-    distillDraft = null;
-    openModal("创建人格","生成过程会使用你配置的模型并计入用量。先确认资料，再生成草稿。",`<div class="distill-options"><button type="button" class="distill-option" data-action="persona-generate">${icon("spark")}<strong>按描述直接生成</strong><small>写下要求，直接生成人格草稿，不需要资料或 ZIP。</small></button><button type="button" class="distill-option" data-action="distill-character">${icon("search")}<strong>已有作品角色</strong><small>输入作品和角色，搜索资料并确认身份、版本，生成聊天人格与 Skill 包。</small></button><button type="button" class="distill-option" data-action="distill-corpus">${icon("upload")}<strong>已有语料 / 真人表达</strong><small>上传 ZIP，选择文件与目标说话者，仅提炼人设描写，不生成 Skill。</small></button></div><p class="sensitive-note">仅选中的文本发送到你配置的模型服务。真人语料不自动联网补全生平，不推断材料中不存在的私事。</p>`);
-  }
-
-  function characterForm() { openModal("蒸馏作品角色","先搜索候选，确认具体角色和作品版本后才开始生成。",`<div class="form-grid">${field("work","作品名称","","text","例如一部动画、游戏、小说或电影。","required data-full maxlength=\"200\"")}${field("character","角色名称","","text","同名角色会在下一步提供候选。","required data-full maxlength=\"200\"")}</div>`,"distill-search",null,"搜索候选"); }
-
-  function generateForm() {
-    openModal("按描述生成人格","输入你的要求，由当前模型生成可编辑草稿；不检索网页，不生成 Skill。",`<div class="form-grid">${field("name","人格名称（可选）","","text","留空使用“自定义人格”。","data-full maxlength=\"100\"")}${textarea("description","希望它是什么样的人？","","例如：喜欢天文、说话简洁，有自己的观点；我疲惫时先听我说，不急着讲道理。","required rows=\"7\" maxlength=\"6000\"")}</div><p class="help-caption">描述会发送给已配置的模型，计入用量。生成后可预览、试聊，再保存。</p>`,"persona-generate",null,"生成人格草稿");
-  }
-
-  async function profilePanel() {
-    const config = await api('/api/bot-profiles');
-    state.botProfiles = config;
-    return `<section class="panel"><div class="panel-head"><div><h2>机器人配置</h2><p>统一选择人格、模型和回复规则。新聊天继承默认配置；记忆隔离不受影响。</p></div>${button("新增配置","profile-new","small","plus")}</div><div class="panel-body"><div class="record-grid">${config.items.map(p => `<article class="record-card"><h3>${e(p.name)} ${p.id === config.default_id ? tag("默认配置") : ""}</h3><p>人格：${e(personaName(p.values.persona_id ?? "default"))}</p><p class="help-caption">${config.scopes.filter(s => s.profile_id === p.id || s.profile_id === "" && p.id === config.default_id).length} 个聊天使用</p><div class="record-actions">${button("编辑","profile-edit","small","edit",`data-id="${e(p.id)}"`)}${button("绑定聊天","profile-bind","small","groups",`data-id="${e(p.id)}"`)}${p.id !== config.default_id ? button("删除","profile-delete","ghost small","trash",`data-id="${e(p.id)}"`) : ""}</div></article>`).join("")}</div>${config.scopes.some(s => s.profile_id == null) ? notice("已有聊天保留原来的独立设置。点击“绑定聊天”可批量迁入统一配置，绑定后清除这些聊天的配置覆盖；聊天记录和记忆保留。") : ""}</div></section>`;
-  }
-
-  function profileForm(id) {
-    const config=state.botProfiles, item=config.items.find(p=>p.id===id), values=item?.values || {};
-    openModal(item ? "编辑机器人配置" : "新增机器人配置","保存后对继承此配置的聊天生效；单独覆盖的设置保留。",`<input type="hidden" name="id" value="${e(item?.id || '')}"><div class="form-grid">${field("name","配置名称",item?.name || "","text","例如：默认陪伴、工作群。","required data-full maxlength=\"80\"")}${select("persona_id","人格",[["","不使用人格"],...state.personas.map(p=>[p.id,p.name])],values.persona_id ?? "default")}${select("model_id","聊天模型",[["","跟随全局聊天模型"],...(state.settings.providers || []).map(p=>[p.id,p.name || p.model])],values.model_id || "")}${select("activity","群聊回应方式",[["quiet","仅被提及"],["balanced","适时回应"],["active","积极接话"]],values.activity || "balanced")}</div>${toggle("is_default","设为默认配置","所有跟随默认配置的聊天与新聊天会使用它。",item?.id===config.default_id)}<details class="details"><summary>回复与工具能力</summary>${select("trigger_at","被 @ 时触发",[["","跟随全局设置"],["true","开启"],["false","关闭"]],values.trigger_at == null ? "" : String(values.trigger_at))}${select("trigger_reply","被回复时触发",[["","跟随全局设置"],["true","开启"],["false","关闭"]],values.trigger_reply == null ? "" : String(values.trigger_reply))}${select("trigger_name","提及名字时触发",[["","跟随全局设置"],["true","开启"],["false","关闭"]],values.trigger_name == null ? "" : String(values.trigger_name))}${select("plan_enabled","启用 Planner",[["","跟随全局设置"],["true","开启"],["false","关闭"]],values.plan_enabled == null ? "" : String(values.plan_enabled))}${select("proactive_reply","允许主动接话",[["","跟随全局设置"],["true","开启"],["false","关闭"]],values.proactive_reply == null ? "" : String(values.proactive_reply))}${toggle("private_always_reply","私聊每条回复","对未单独覆盖的私聊和本地聊天生效；关闭后按 Planner 判断。",values.private_always_reply ?? true)}${toggle("auto_memory","自动记忆","新聊天继承；自动提取仍遵守记忆审核。",values.auto_memory ?? true)}${toggle("dictionary_learn","学习群词","发现候选，审核后使用。",values.dictionary_learn ?? false)}${toggle("dictionary_use","使用群词","仅使用已确认且允许表达的词条。",values.dictionary_use ?? false)}${toggle("always_reply","群聊每条必回复","适合专用私聊，仍受接收规则与暂停开关约束。",values.always_reply ?? false)}${toggle("allow_tools","允许普通工具","电脑能力与管理员权限仍需独立开启。",values.allow_tools ?? true)}${toggle("allow_mcp","允许扩展工具","还需对应服务及工具允许列表。",values.allow_mcp ?? false)}${toggle("use_persona_knowledge","使用人格知识","使用人格已确认的公开资料。",values.use_persona_knowledge ?? true)}</details>`,"bot-profile",null,"保存配置");
-  }
-
-  function profileBindForm(id) {
-    const config=state.botProfiles, item=config.items.find(p=>p.id===id);
-    openModal("绑定聊天到“"+item.name+"”","所选聊天将清除人格、模型和回复规则的独立覆盖，继承这份配置。记忆和聊天记录不变。",`<input type="hidden" name="profile_id" value="${e(id)}"><div class="corpus-files">${config.scopes.map(s=>`<label><input type="checkbox" name="scope_ids" value="${e(s.id)}"> ${e(s.name)} <small>${e(s.profile_id == null ? "旧独立设置" : s.profile_id || "跟随默认配置")}${s.overrides?.length ? " · 有独立覆盖" : ""}</small></label>`).join("<br>")}</div>`,"profile-bind",null,"绑定所选聊天");
-  }
-
-  function corpusForm() { openModal("上传蒸馏语料","ZIP 中的文件先进入独立任务空间，不会自动进入长期记忆。",`<div class="corpus-upload">${icon("upload")}${button("选择 ZIP 文件","choose-corpus","primary","upload")}<p>ZIP 最多 24 MB；自动识别可阅读文件，下一步展示文件清单与说话者。支持真人和虚构人物语料。</p></div><div id="corpus-preview"></div>`); }
-
-  function showDistillPreview() {
-    const draft = distillDraft; if (!draft) return;
-    if (draft.mode === "character") {
-      const candidates = draft.candidates || [];
-      openModal("确认要蒸馏的角色","请核对角色、作品版本与来源。候选中的资料只作为研究内容。",`<input type="hidden" name="mode" value="character"><div class="corpus-files">${candidates.map((item,index) => `<div><label><input type="checkbox" name="candidate_ids" value="${e(item.id || index)}" ${candidates.length === 1 ? "checked" : ""}> <strong>${e(item.name || item.character || item.title || "候选角色")}</strong> ${e(item.work || item.description || item.summary || item.snippet || "")}</label>${item.version_hint ? `<p>版本线索：${e(item.version_hint)}</p>` : ""}${item.officiality === "not_verified" ? '<p>来源身份尚未核实，请结合原文确认。</p>' : ""}${safeLink(item.url) ? `<p><a href="${e(item.url)}" target="_blank" rel="noopener noreferrer">查看来源 ↗</a></p>` : ""}</div>`).join("") || '<p class="help-caption">未找到候选。请返回并更换作品或角色名称。</p>'}</div>${draft.warnings?.length ? notice(draft.warnings.join("；"),"warning") : ""}<div class="form-grid">${field("version","作品版本 / 时间范围（可选）","","text","例如：动画第一季，避免混用不同时间线。","data-full")}${field("name","人格名称",draft.character || "","text","生成后还可以编辑。","data-full")}</div>${toggle("confirmed","我已核对角色与资料范围","开始后会搜索公开资料并调用模型，生成 Skill 包与聊天人格。",false)}`,"distill-start",null,"开始蒸馏");
-    } else {
-      const files = draft.files || [], speakers = draft.speakers || [];
-      openModal("确认语料与目标说话者","只使用选中的可读文件。不联网补充真人资料，不自动写入记忆。",`<input type="hidden" name="mode" value="corpus"><div class="corpus-files">${files.map((file,index) => `<div><label><input type="checkbox" name="selected_files" value="${e(file.id || file.path || file.name || index)}" ${file.readable !== false && !["skipped","failed","unsupported"].includes(file.status) ? "checked" : "disabled"}> <strong>${e(file.name || file.path)}</strong> ${e({readable:"可读取",skipped:"已跳过",failed:"读取失败"}[file.status] || file.status || "可读取")} ${e(file.reason || file.error || "")} ${file.characters ? e(file.characters) + " 字符" : ""} ${file.warnings?.length ? e(file.warnings.join("；")) : ""}</label></div>`).join("")}</div><div class="form-grid">${speakers.length ? select("target_speaker","目标说话者",[["","请选择"],...speakers.map(item => typeof item === "string" ? [item,item] : [item.id || item.name,item.name || item.label || item.id])],"","required data-full") : field("target_speaker","目标说话者 / 人物","","text","说明需要提炼谁。多人材料必须区分目标、引用和转述。","required data-full")}${field("name","人格名称","","text","可用真实姓名、昵称或你自定义的名称。","required data-full maxlength=\"100\"")}</div>${draft.warnings?.length ? notice(draft.warnings.join("；"),"warning") : ""}${toggle("confirmed","确认使用所选语料蒸馏人设","只生成人设描写，不生成 Skill。选中文本会发送给你的模型服务。",false)}`,"distill-start",null,"开始蒸馏");
-    }
-    $("#modal").classList.add("modal-wide");
-  }
 
   async function showJob(id) { currentJob = unwrapJob(await api(`/api/jobs/${safeId(id)}`)); openModal("任务详情","关闭窗口后，任务仍在后台保存。",jobDetail(currentJob)); $("#modal").classList.add("modal-wide"); watch(currentJob); }
 
@@ -291,6 +152,7 @@ window.MikubotExperience = (() => {
     else if(kind === "trial-persona") { const result=await api(`/api/persona/distill/${safeId(data.job_id)}/trial`,{method:"POST",body:{text:data.text}});$("#trial-response").innerHTML=`<div class="trial-response">${e(result.reply || result.message || "未返回试聊内容。")}</div>`; }
     else if(kind === "new-admin") { await api("/api/admins",{method:"POST",body:data});closeModal();toast("管理员账号已添加");await bootstrap(); }
     else if(kind === "computer-settings") { await api("/api/settings",{method:"PUT",body:{computer:{enabled:data.enabled,allow_external_tools:!!data.allow_external_tools,runtime:data.runtime || "docker",workspace:data.workspace,approval_mode:data.approval_mode || "automatic",max_steps:Number(data.max_steps),timeout_seconds:Number(data.timeout_seconds),max_output_chars:Number(data.max_output_chars)}}});toast("电脑任务设置已保存");await bootstrap(); }
+    else if(kind === "timezone-settings") {await api('/api/settings',{method:'PUT',body:{time:{timezone:data.timezone}}});toast('时区已保存');await bootstrap();}
     else if(kind === "queue-settings") {await api('/api/settings',{method:'PUT',body:{scheduler:Object.fromEntries(['model_concurrency','model_queue_limit','background_queue_limit','scope_queue_limit'].map(k=>[k,Number(data[k])]))}});toast('调度设置已保存');await bootstrap();}
     else if(kind === "job-approval") { await api(`/api/jobs/${safeId(data.job_id)}/approve`,{method:"POST",body:{approval_id:data.approval_id}});closeModal();toast("已批准本次动作，任务继续处理。");await bootstrap(); }
     else if(kind === "local-qq") {

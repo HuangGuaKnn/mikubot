@@ -21,7 +21,7 @@ const sandbox={window:{MikubotQuickStart:{diagnosticsPanel:()=>"",modelSelection
   renderPersonas:async()=>'<h1>人格</h1><button data-action="new-persona" >创造人格</button>',renderSettings:async()=>'<div class="settings-main"><form data-form="qq"></form></div>',
 };
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(__dirname,"../mikubot/static/experience.js"),"utf8"),sandbox);
+for(const file of [...require('./ui_modules.cjs').experienceFactories,'experience.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,"../mikubot/static",file),"utf8"),sandbox,{filename:file});
 const ui=sandbox.window.MikubotExperience;
 const plain=value=>JSON.parse(JSON.stringify(value));
 
@@ -128,7 +128,7 @@ async function fullScriptIntegration(){
     scrollTo(){},navigator:{},
   };
   browser.window=browser;vm.createContext(browser);
-  for(const file of ["auth.js","workspace-features.js","quick-start.js","experience.js","workspace-pages.js","app.js"])vm.runInContext(fs.readFileSync(path.join(__dirname,"../mikubot/static",file),"utf8"),browser,{filename:file});
+  for(const file of require('./ui_modules.cjs').integrationScripts)vm.runInContext(fs.readFileSync(path.join(__dirname,"../mikubot/static",file),"utf8"),browser,{filename:file});
   await new Promise(resolve=>setTimeout(resolve,10));
   assert.match(element("#navigation").innerHTML,/机器人管理/);
   assert.match(element("#content").innerHTML,/聊天模式/);

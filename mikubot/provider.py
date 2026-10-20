@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 import time
 import heapq
 from datetime import datetime, timedelta, timezone
@@ -12,12 +13,49 @@ from urllib.parse import urlsplit
 
 import httpx
 from .settings import resolve_model
+from .timezones import config_zone, day_bounds
 
 
 class ProviderError(ValueError):
     def __init__(self, message, *, retryable=False):
         super().__init__(message)
         self.retryable = retryable
+
+
+class ProviderBudgetExceededError(ProviderError):
+    """A local budget or Planner quota actually vetoed the request."""
+
+
+class ProviderTimeoutError(ProviderError):
+    """A connection or response deadline expired."""
+
+
+class ProviderConnectionError(ProviderError):
+    """The connection failed, possibly after dispatch."""
+
+
+class ProviderRateLimitError(ProviderError):
+    """An upstream 429 is not proof of a local budget veto."""
+
+
+def is_budget_exceeded(exc):
+    if isinstance(exc, (ProviderTimeoutError, ProviderConnectionError, ProviderRateLimitError)):
+        return False
+    if isinstance(exc, ProviderBudgetExceededError):
+        return True
+    # Compatibility with integrations still raising plain ValueError/ProviderError.
+    # An accounting estimate following an uncertain completion is not exhaustion.
+    text = str(exc)
+    if '已保留预算估算' in text:
+        return False
+    return bool(re.search(r'(?:预算|额度).{0,12}(?:不足|已达|已用完|上限)|次数已达', text))
+
+
+def request_timeout(config):
+    seconds = config.get('timeout_seconds', 90)
+    if type(seconds) is not int or not 5 <= seconds <= 600:
+        raise ProviderError('模型等待超时须为5—600秒的整数')
+    return httpx.Timeout(seconds, connect=min(12, seconds))
 
 
 BACKGROUND_PURPOSES = {'knowledge', 'memory_extract', 'memory', 'jargon_learning', 'expression_learning', 'context_digest', 'distillation', 'sticker_vision', 'sticker_select'}
@@ -106,6 +144,8 @@ def estimate_tokens(messages, tools=None):
 class Provider:
     def __init__(self, settings, store):
         self.settings, self.store = settings, store
+        if hasattr(store, 'configure_timezone'):
+            store.configure_timezone(settings)
         self._call_lock = asyncio.Lock()
         self._provider_locks = {}
         self._background_gate = _PriorityGate()
@@ -159,9 +199,7 @@ class Provider:
                 self._background_gate.release()
 
     def planner_totals(self, scope_id):
-        now = datetime.now(timezone(timedelta(hours=8)))
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
-        end = (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).astimezone(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+        start, end = day_bounds(self.settings)
         with self.store._lock:
             row = self.store._conn.execute("SELECT COUNT(*),COALESCE(SUM(input_tokens+output_tokens),0) FROM usage WHERE json_extract(data,'$.scope_id')=? AND created_at>=? AND created_at<? AND json_extract(data,'$.purpose')='planner'",
                                            (scope_id, start, end)).fetchone()
@@ -178,17 +216,18 @@ class Provider:
         pending = list(self._reservations.values()) if pending is None else pending
         reserved = [x for x in pending if x['purpose'] == 'planner' and x['scope_id'] == scope_id]
         if limits['daily_calls'] and used['calls'] + len(reserved) + (1 if estimated_input else 0) > limits['daily_calls']:
-            raise ProviderError('当前会话今日 Planner 次数已达上限。')
+            raise ProviderBudgetExceededError('当前会话今日 Planner 次数已达上限。')
         tokens = used['tokens'] + sum(x['input_tokens'] + x['output_tokens'] for x in reserved) + estimated_input + max_output
         if limits['daily_tokens'] and tokens > limits['daily_tokens']:
-            raise ProviderError('当前会话今日 Planner Token 预算不足。')
+            raise ProviderBudgetExceededError('当前会话今日 Planner Token 预算不足。')
 
     @staticmethod
     def _same_model(left, right):
-        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price')
+        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds')
         return all(left.get(key) == right.get(key) for key in fields)
 
     def _check_send(self, before_send):
+        if getattr(self, '_updating', False): raise ProviderError('正在退出并安装更新，请稍后重新打开聊天。')
         if before_send is not None and before_send() is False:
             raise ProviderError('本次请求来源、权限或模型配置已变化，未发送模型请求。')
 
@@ -210,9 +249,9 @@ class Provider:
         totals = self.store.usage_totals()
         pending = list(self._reservations.values())
         if budget['daily_tokens'] and totals['tokens'] + sum(x['input_tokens'] + x['output_tokens'] for x in pending) > budget['daily_tokens']:
-            raise ProviderError('当前 Token 预算已不足以容纳在途请求，本次未发送。')
+            raise ProviderBudgetExceededError('当前 Token 预算已不足以容纳在途请求，本次未发送。')
         if budget['daily_cost'] and totals['cost'] + sum(x['cost'] for x in pending) > budget['daily_cost'] + 1e-12:
-            raise ProviderError('当前费用预算已不足以容纳在途请求，本次未发送。')
+            raise ProviderBudgetExceededError('当前费用预算已不足以容纳在途请求，本次未发送。')
         current = self._reservations.get(reservation)
         if current is None:
             raise ProviderError('本次预算预留已失效。')
@@ -222,7 +261,7 @@ class Provider:
         limit = self._scope_limit(scope)
         scope_reserved = sum(x['input_tokens'] + x['output_tokens'] for x in pending if x['scope_id'] == scope)
         if limit and self.store.usage_totals(scope)['tokens'] + scope_reserved > limit:
-            raise ProviderError('当前会话预算已不足以容纳在途请求，本次未发送。')
+            raise ProviderBudgetExceededError('当前会话预算已不足以容纳在途请求，本次未发送。')
 
     async def _reserve(self, cfg, scope_id, purpose, estimated_input, max_output, *, replace=None):
         async with self._call_lock:
@@ -241,7 +280,7 @@ class Provider:
             if budget['daily_tokens']:
                 remaining = int(budget['daily_tokens'] - totals['tokens'] - reserved_tokens - estimated_input)
                 if remaining < min_output or remaining < 0:
-                    raise ProviderError('今日剩余 Token 预算不足以完成本次请求。')
+                    raise ProviderBudgetExceededError('今日剩余 Token 预算不足以完成本次请求。')
                 allowed_output = min(allowed_output, remaining)
             scope_limit = self._scope_limit(scope_id)
             if scope_limit:
@@ -249,7 +288,7 @@ class Provider:
                 scope_reserved = sum(x['input_tokens'] + x['output_tokens'] for x in pending if x['scope_id'] == scope_id)
                 remaining = int(scope_limit - scope_used - scope_reserved - estimated_input)
                 if remaining < min_output or remaining < 0:
-                    raise ProviderError('当前会话的今日 Token 预算不足。')
+                    raise ProviderBudgetExceededError('当前会话的今日 Token 预算不足。')
                 allowed_output = min(allowed_output, remaining)
             input_price, output_price = float(cfg.get('input_price', 0)), float(cfg.get('output_price', 0))
             input_cost = estimated_input * input_price / 1000000
@@ -257,11 +296,11 @@ class Provider:
                 remaining_cost = budget['daily_cost'] - totals['cost'] - reserved_cost - input_cost
                 # Input cost is checked independently, including free output.
                 if remaining_cost < -1e-12:
-                    raise ProviderError('剩余费用预算不足以承担本次输入。')
+                    raise ProviderBudgetExceededError('剩余费用预算不足以承担本次输入。')
                 if output_price > 0:
                     affordable = int(max(0, remaining_cost) * 1000000 / output_price)
                     if affordable < min_output:
-                        raise ProviderError('剩余费用预算不足以完成本次请求。')
+                        raise ProviderBudgetExceededError('剩余费用预算不足以完成本次请求。')
                     allowed_output = min(allowed_output, affordable)
             key = replace if replace is not None else object()
             self._reservations[key] = {'scope_id': scope_id, 'purpose': purpose, 'model': cfg['model'],
@@ -357,6 +396,7 @@ class Provider:
         if not cfg.get('base_url') or not cfg.get('model'):
             raise ProviderError('请先在设置中填写模型服务地址与模型名称，并测试连接。')
         url = endpoint(cfg['base_url'])
+        timeout = request_timeout(cfg)
         reservation, max_tokens = await self._reserve(cfg, scope_id, purpose, estimate_tokens(messages, tools), max_tokens)
         payload = {'model': cfg['model'], 'messages': messages, 'temperature': cfg.get('temperature', 0.7), 'max_tokens': max_tokens}
         if tools:
@@ -368,7 +408,7 @@ class Provider:
         started = time.monotonic()
         record, dispatched = None, False
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=12), follow_redirects=False) as client:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                 response = None
                 for attempt in range(2):
                     self._check_reserved_limits(reservation)
@@ -381,11 +421,13 @@ class Provider:
                         if attempt == 0:
                             await asyncio.sleep(.4)
                             continue
-                        raise ProviderError('无法连接模型服务，请检查地址、网络或本地模型是否启动。', retryable=True) from exc
+                        if isinstance(exc, httpx.ConnectTimeout):
+                            raise ProviderTimeoutError('连接模型服务超时，请检查地址、网络或本地模型是否启动。', retryable=True) from exc
+                        raise ProviderConnectionError('无法连接模型服务，请检查地址、网络或本地模型是否启动。', retryable=True) from exc
                     except httpx.TimeoutException as exc:
-                        raise ProviderError('模型响应超时，本次消费无法确认，已保留预算估算，请稍后重试。') from exc
+                        raise ProviderTimeoutError('模型响应超时，本次消费无法确认，已保留预算估算，请稍后重试。') from exc
                     except httpx.HTTPError as exc:
-                        raise ProviderError('模型连接中断，本次消费无法确认，已保留预算估算。') from exc
+                        raise ProviderConnectionError('模型连接中断，本次消费无法确认，已保留预算估算。') from exc
                     if response.status_code >= 300:
                         dispatched = False
                     if response.status_code in (429, 502, 503) and attempt == 0:
@@ -402,6 +444,8 @@ class Provider:
             if response is None:
                 raise ProviderError('模型服务未返回响应')
             if response.status_code >= 300:
+                if response.status_code == 429:
+                    raise ProviderRateLimitError('模型服务返回429：服务限流或额度受限，请检查服务商用量或稍后重试。', retryable=True)
                 reason = {401: '密钥无效或未授权', 403: '无访问权限', 404: '地址或模型不存在', 429: '服务限流或额度不足'}.get(response.status_code, '服务请求失败')
                 raise ProviderError(f'模型服务返回 {response.status_code}：{reason}。', retryable=response.status_code == 429 or 500 <= response.status_code <= 599)
             try:

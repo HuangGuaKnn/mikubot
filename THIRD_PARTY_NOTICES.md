@@ -1,8 +1,9 @@
 # Third-party notices and corresponding source
 
 mikubot uses third-party software under each component's own license. Those
-licenses and copyright notices are retained independently of any license for
-mikubot's original code. This file does not select a general project license.
+licenses and copyright notices are retained independently of the MIT license
+for mikubot's original code, selected in the root [LICENSE](LICENSE). The MIT
+license does not replace the licenses of bundled third-party components.
 
 ## pystray 0.19.5
 
@@ -15,7 +16,7 @@ mikubot's original code. This file does not select a general project license.
 - Use: the Windows system tray icon. mikubot has not modified this library.
 
 The complete Python package source used by this release is included in
-[`third_party/pystray/pystray/`](third_party/pystray/pystray/), together with
+[`third_party/pystray/pystray/`](third_party/pystray/pystray), together with
 upstream package metadata and a SHA-256 source manifest. These files were copied
 from the installed 0.19.5 distribution and checked against its wheel `RECORD`.
 The source archive, portable archive and installed program all include these
@@ -47,7 +48,7 @@ Copy-Item -LiteralPath C:\src\modified-pystray\pystray -Destination .venv\Lib\si
 
 Remove `.venv\Lib\site-packages\pystray\__pycache__` if present so Python will
 load your changed source. For source deployment, run
-`.\.venv\Scripts\python.exe -m qunyu --browser`. To produce a new Windows program
+`.\.venv\Scripts\python.exe -m mikubot --browser`. To produce a new Windows program
 containing that library, run:
 
 ```powershell
@@ -66,13 +67,13 @@ with the modified library. mikubot imposes no additional restriction on
 modification of the library portions or on reverse engineering necessary to
 debug those modifications. This specific permission ensures that the provided
 application code can be used for LGPL recombination; it does not replace the
-library's license or choose a general license for the rest of the project.
+library's license. The rest of mikubot's original code is licensed under MIT.
 
 ## Character Skill Producer adaptation
 
-The persona distillation method in `qunyu/resources/csp/` is adapted from
+The persona distillation method in `mikubot/resources/csp/` is adapted from
 Character Skill Producer (CSP), copyright (c) 2026 qian-gugugaga. Its MIT license
-is retained in [`qunyu/resources/csp/LICENSE`](qunyu/resources/csp/LICENSE), and the
+is retained in [`mikubot/resources/csp/LICENSE`](mikubot/resources/csp/LICENSE), and the
 adapted Skill identifies the source. The adaptation supports work characters
 and uploaded corpus material; it does not grant tool or computer permissions.
 

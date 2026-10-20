@@ -112,6 +112,7 @@ class UpdateManager:
         self.include_prerelease = False
         self._cache, self._check_lock, self._task = {}, asyncio.Lock(), None
         self._launching = False
+        self._auto_task = None
         self.download = {'status': 'idle', 'message': '尚未下载更新'}
         try:
             self._safe_folder()
@@ -161,7 +162,16 @@ class UpdateManager:
                     and version_key(value['tag']) >= version_key('0.1.1'))
         except (ValueError, KeyError): value['can_install'] = False
         value.pop('sha256', None)
-        return {**self.runtime, 'checked_at': self.checked_at, 'releases': copy.deepcopy(self.releases),
+        outcome = {}
+        result = self.folder / 'install-result.json'
+        if result.is_file() and not is_link(result) and result.stat().st_size <= 4096:
+            try:
+                raw = json.loads(result.read_text('utf-8-sig'))
+                if raw.get('status') in ('completed', 'failed', 'unknown') and raw.get('download_id') == self.download.get('id'):
+                    outcome = {key: str(raw.get(key, ''))[:500] for key in ('status', 'message', 'at')}
+                    if value.get('status') == 'interrupted': value.update(status=outcome['status'], message=outcome['message'])
+            except (ValueError, OSError, AttributeError): pass
+        return {**self.runtime, 'automatic_active': bool(self._auto_task and not self._auto_task.done()), 'install_result': outcome, 'checked_at': self.checked_at, 'releases': copy.deepcopy(self.releases),
                 'page': self.page, 'has_more': self.has_more, 'include_prerelease': self.include_prerelease, 'download': value}
 
     @staticmethod
@@ -230,6 +240,7 @@ class UpdateManager:
             return self.snapshot()
 
     def start_download(self, release_id, kind):
+        if self._auto_task and not self._auto_task.done(): raise ValueError('一键更新进行中，请先取消或等待完成')
         if self._launching: raise ValueError('正在准备安装，请勿切换下载')
         if type(release_id) is not int or not isinstance(kind, str) or kind not in KINDS: raise ValueError('请选择发行版与文件类型')
         release = next((x for x in self.releases if x['id'] == release_id), None)
@@ -302,6 +313,10 @@ class UpdateManager:
 
     async def cancel(self):
         if self._launching: raise ValueError('正在准备安装，请稍后操作')
+        if self._auto_task and not self._auto_task.done():
+            self._auto_task.cancel()
+            try: await self._auto_task
+            except asyncio.CancelledError: pass
         if self._task and not self._task.done():
             self._task.cancel()
             try: await self._task
@@ -321,7 +336,7 @@ class UpdateManager:
         if not valid: raise ValueError('已下载文件发生变化，请重新下载')
         return path
 
-    def launch_installer(self, download_id):
+    def launch_installer(self, download_id, *, automatic=False):
         if not self.runtime['install_supported'] or self.download.get('kind') != 'installer':
             raise ValueError('只有 Windows 安装版支持直接启动更新；请下载对应文件手动部署')
         key = version_key(self.download['tag'])
@@ -334,16 +349,48 @@ class UpdateManager:
             raise ValueError('数据与程序目录存在包含关系，请先将数据移到独立目录后更新')
         # The downloaded installer runs from the data directory, waits for this
         # exact process to exit, and then uses the existing staged installer.
-        process = subprocess.Popen([str(path), '--target', str(target), '--wait-pid', str(os.getpid()),
-                                    '--data-dir', str(self.data_dir)], cwd=path.parent,
+        command = [str(path), '--target', str(target), '--wait-pid', str(os.getpid()), '--data-dir', str(self.data_dir)]
+        if automatic:
+            folder = self._safe_folder()
+            worker, config = folder / 'update-worker.ps1', folder / 'update-worker.json'
+            if any(is_link(value) for value in (worker, config, folder/'install-result.json', folder/'install-result.json.tmp', folder/'install.log')):
+                raise ValueError('更新工作文件包含链接，未启动安装')
+            worker.write_text((Path(__file__).parent/'resources'/'update-worker.ps1').read_text('utf-8'), 'utf-8-sig')
+            config.write_text(json.dumps({'installer': str(path), 'sha256': self.download['sha256'], 'parent_pid': os.getpid(), 'download_id': self.download['id'],
+                'arguments': subprocess.list2cmdline(command[1:]+['--silent','--no-launch']),
+                'application': str(target/'mikubot.exe'), 'launch_arguments': subprocess.list2cmdline(['--data-dir',str(self.data_dir)]),
+                'result': str(folder/'install-result.json'), 'log': str(folder/'install.log')}, ensure_ascii=False), 'utf-8')
+            # Use the system copy, not a powershell.exe found through PATH.
+            powershell = Path(os.environ.get('SystemRoot', r'C:\Windows'))/'System32'/'WindowsPowerShell'/'v1.0'/'powershell.exe'
+            command = [str(powershell), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(worker), '-ConfigPath', str(config)]
+        process = subprocess.Popen(command, cwd=path.parent,
                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        self.download.update(status='installing', message='安装器已启动，mikubot 即将退出；请在安装窗口完成更新')
+        self.download.update(status='installing', automatic=automatic, message='安装器已启动，mikubot 即将退出；安装后自动重新打开' if automatic else '安装器已启动，mikubot 即将退出；请在安装窗口完成更新')
         try: self._save()
         except (OSError, ValueError): logging.getLogger(__name__).warning('安装器已启动，但更新记录未能写入')
         return {'ok': True, 'installer_pid': process.pid, 'message': self.download['message']}
 
+    def start_automatic(self, release_id, handoff):
+        if not self.runtime['install_supported']: raise ValueError('一键更新需要 Windows 安装版；源码与便携部署请手动更新')
+        release = next((value for value in self.releases if value['id'] == release_id), None)
+        if not release or version_key(release['tag']) < version_key(__version__): raise ValueError('请先检查并选择当前或更新的发行版本')
+        self.start_download(release_id, 'installer')
+        async def finish():
+            try:
+                await asyncio.shield(self._task)
+                if self.download.get('status') != 'ready': return
+                await handoff(self.download['id'], automatic=True)
+            except asyncio.CancelledError: raise
+            except Exception:
+                logging.getLogger(__name__).exception('一键更新交接失败')
+                self.download.update(status='failed', message='下载后未能交接安装，请先停止后台任务并检查运行日志；当前程序未替换。')
+                self._save()
+        self._auto_task = asyncio.create_task(finish())
+        return self.snapshot()
+
     async def close(self):
+        if self._launching: return
         await self.cancel()
 
 
@@ -357,6 +404,32 @@ def install_updates(app, data_dir):
 
     def snapshot(request):
         return {**manager.snapshot(), 'local_install_allowed': local_peer(request) and callable(app.state.shutdown)}
+
+    def check_idle():
+        if any(job['status'] not in TERMINAL for job in app.state.runs.list()):
+            raise ValueError('仍有后台任务进行中，请先完成或停止任务再安装')
+        if app.state.provider._reservations:
+            raise ValueError('仍有模型请求进行中，请等待回复完成后更新')
+
+    async def handoff(download_id, *, automatic=False):
+        check_idle()
+        if manager._launching: raise ValueError('已在准备安装，请勿重复点击')
+        manager._launching = app.state.provider._updating = True
+        try:
+            result = await asyncio.to_thread(manager.launch_installer, download_id, automatic=automatic)
+        except BaseException:
+            manager._launching = app.state.provider._updating = False
+            raise
+        asyncio.get_running_loop().call_later(.5, app.state.shutdown)
+        return result
+
+    @app.post('/api/updates/apply')
+    async def apply(request: Request, payload: dict = Body(...)):
+        if not local_peer(request): raise HTTPException(403, '请在运行 mikubot 的电脑上发起一键更新')
+        if not callable(app.state.shutdown): raise ValueError('当前启动方式不能安全退出，请手动部署')
+        check_idle()
+        manager.start_automatic(payload.get('release_id'), handoff)
+        return snapshot(request)
 
     @app.get('/api/updates')
     async def status(request: Request):
@@ -386,12 +459,5 @@ def install_updates(app, data_dir):
     async def install(request: Request, payload: dict = Body(...)):
         if not local_peer(request): raise HTTPException(403, '请在运行 mikubot 的电脑上启动安装，远程页面只能下载')
         if not callable(app.state.shutdown): raise ValueError('当前启动方式不能安全退出，请下载后手动安装')
-        if any(job['status'] not in TERMINAL for job in app.state.runs.list()):
-            raise ValueError('仍有后台任务进行中，请先完成或停止任务再安装')
-        # Serialize verify/launch with all updater mutations on this event loop.
-        if getattr(manager, '_launching', False): raise ValueError('已在准备安装，请勿重复点击')
-        manager._launching = True
-        try: result = await asyncio.to_thread(manager.launch_installer, payload.get('download_id'))
-        finally: manager._launching = False
-        asyncio.get_running_loop().call_later(.5, app.state.shutdown)
-        return result
+        if manager._auto_task and not manager._auto_task.done(): raise ValueError('一键更新进行中，请勿重复启动安装')
+        return await handoff(payload.get('download_id'), automatic=payload.get('automatic') is True)

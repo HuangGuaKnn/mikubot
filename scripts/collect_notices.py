@@ -55,3 +55,4 @@ for name in sorted(source_names):
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, target)
 shutil.copyfile(project_root / 'THIRD_PARTY_NOTICES.md', Path(sys.argv[1]) / 'THIRD_PARTY_NOTICES.md')
+shutil.copyfile(project_root / 'LICENSE', Path(sys.argv[1]) / 'LICENSE')

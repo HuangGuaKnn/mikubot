@@ -18,7 +18,7 @@ function scopeModal(item = null) {
 }
 
 function outputFields(output,prefix="") {
-  return `<div class="form-grid output-fields">${toggle(prefix+"enabled","启用自然分段","少量文字可以只发一段。关闭自然分段时，平台发送上限仍有效。",output.enabled ?? true)}${field(prefix+"target_chars","目标段长（字符）",output.target_chars ?? 160,"number","在此长度附近寻找自然停顿。","min=\"20\" max=\"1000\"")}${field(prefix+"max_chars","自然分段参考上限",output.max_chars ?? 320,"number","软上限；完整链接或代码可能更长。","min=\"40\" max=\"4000\"")}${field(prefix+"platform_max_chars","发送长度保护上限",output.platform_max_chars ?? 1800,"number","本机保护设置，非 QQ 官方承诺值。完整代码或链接超过此值时报告失败。","min=\"40\" max=\"20000\"")}${field(prefix+"interval_ms","发送间隔（毫秒）",output.interval_ms ?? 600,"number","分段之间的间隔。","min=\"0\" max=\"5000\"")}${field(prefix+"max_parts","自然分段参考数量",output.max_parts ?? 8,"number","软限制；发送长度保护可能需要更多段，不截断正文。","min=\"1\" max=\"20\"")}</div>`;
+  return `<div class="form-grid output-fields">${toggle(prefix+"enabled","启用模型自然分段","由模型在生成时决定每条消息；空行分条，单换行留在条内。关闭后整条发送，平台长度保护仍有效。",output.enabled ?? true)}${select(prefix+"mode","分段方式",[["model","模型自然分段（推荐）"],["length","旧版按长度分段"]],output.mode || "model","data-full")}${field(prefix+"platform_max_chars","发送长度保护上限",output.platform_max_chars ?? 1800,"number","只处理平台超长情况；完整代码或链接超过此值时报告失败，原文留在本地。","min=\"40\" max=\"20000\"")}${field(prefix+"interval_ms","发送间隔（毫秒）",output.interval_ms ?? 600,"number","模型选定的消息之间的间隔。","min=\"0\" max=\"5000\"")}${field(prefix+"max_parts","连续消息条数上限",output.max_parts ?? 8,"number","用于防刷屏，不强制分满；超出时尾部合在一条，保留全文。平台保护可能需要更多条。","min=\"1\" max=\"20\"")}</div><details class="details"><summary>旧版长度参数（仅旧版模式生效）</summary><div class="form-grid">${field(prefix+"target_chars","旧版目标段长",output.target_chars ?? 160,"number","模型自然分段不使用此值。","min=\"20\" max=\"1000\"")}${field(prefix+"max_chars","旧版分段参考上限",output.max_chars ?? 320,"number","仅供旧模式使用。","min=\"40\" max=\"4000\"")}</div></details>`;
 }
 
 function identitySection() {
@@ -27,7 +27,7 @@ function identitySection() {
 }
 
 function outputSection() {
-  return `<section class="panel settings-section" id="output-section"><div class="section-title"><span>${icon("chat")}</span><div><h2>自然消息分段</h2><p>按长度与自然停顿拆分，短回复可以只有几个字。</p></div></div><form data-form="output">${outputFields(state.settings.output || {})}<div class="section-actions"><button type="submit" class="btn primary">保存输出方式</button></div></form></section>`;
+  return `<section class="panel settings-section" id="output-section"><div class="section-title"><span>${icon("chat")}</span><div><h2>自然消息分段</h2><p>模型在生成时决定消息边界，可以几个字，也可以一条里说好几句；不会为了段长再拆句。</p></div></div><form data-form="output">${outputFields(state.settings.output || {})}<div class="section-actions"><button type="submit" class="btn primary">保存输出方式</button></div></form></section>`;
 }
 
 function plannerSection() {

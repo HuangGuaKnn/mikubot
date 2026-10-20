@@ -225,6 +225,12 @@ def _acquire_application_guard(target: Path, data_dir=None):
 
 
 def _acquire_data_guard(data):
+    if Path(data).is_dir():
+        from .startup import data_guard
+        guard=data_guard(data)
+        try:guard.__enter__()
+        except OSError as exc:raise InstallError(str(exc)) from exc
+        return lambda:guard.__exit__(None,None,None)
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     kernel.CreateMutexW.restype = ctypes.c_void_p
     kernel.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]

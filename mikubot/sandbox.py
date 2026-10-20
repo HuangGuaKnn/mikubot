@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
 import uuid
 from .filesystem import is_link
 
-IMAGE = 'python:3.12-slim'
+# Docker Hub library/python OCI index, verified 2026-10-20. Execute the immutable
+# digest, even if someone subsequently retags a different local image.
+IMAGE_DIGEST = 'sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1'
+IMAGE = 'docker.io/library/python:3.12-slim@' + IMAGE_DIGEST
 
 
 def docker_prefix():
@@ -30,7 +34,15 @@ def availability():
             creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         if result.returncode:
             return {'available':False,'message':f'沙箱镜像尚未准备。请在本机运行 docker pull {IMAGE}；软件不会自动下载或更换镜像。'}
-        return {'available':True,'message':'本机 Docker Linux 引擎与沙箱镜像就绪。沙箱默认断网，不挂载管理密钥。'}
+        try:
+            metadata=json.loads(result.stdout)[0]
+            digests=metadata.get('RepoDigests') or []
+            verified=any(value.rsplit('@',1)[-1]==IMAGE_DIGEST and value.split('@',1)[0] in
+                         ('python','library/python','docker.io/library/python') for value in digests if isinstance(value,str))
+        except (ValueError,TypeError,KeyError,IndexError):verified=False
+        if not verified:
+            return {'available':False,'message':f'本地镜像摘要与已核验的官方镜像不符，请运行 docker pull {IMAGE}；未执行代码。'}
+        return {'available':True,'image':IMAGE,'digest_verified':True,'message':'本机 Docker Linux 引擎与固定摘要镜像就绪。沙箱默认断网；工作目录为可写映射，里面的文件可被脚本增删。'}
     except (ValueError,OSError,subprocess.TimeoutExpired) as exc:
         return {'available':False,'message':str(exc) if isinstance(exc,ValueError) else 'Docker 检测超时或不可用，请检查本机引擎。'}
 

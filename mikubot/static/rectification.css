@@ -31,3 +31,4 @@
 @media(max-width:360px){.header-update>span:last-child{display:none}.scope-picker select{max-width:80px}}
 @media(max-height:650px){.wizard-banner{padding:12px 22px}.wizard-banner h2{font-size:21px}.wizard-banner>p{display:none}.wizard-steps{margin-top:8px}.wizard-body{padding:16px 22px}.modal-head{padding:14px 21px}.modal-footer{padding:10px 16px}.wizard-body .quick-connector-guide{margin-top:12px}}
 @media(max-width:760px){.header-update>span:last-child{display:none}.topbar-right .owner-avatar,.topbar-right .topbar-divider{display:none}.scope-picker select{max-width:110px}.chat-directory-row{gap:10px;padding:14px}.chat-directory-row .record-actions{width:100%;flex-wrap:wrap}.bot-config-tabs{position:static;gap:3px}.bot-config-tabs .btn{padding:8px 10px}.modal-footer .btn{min-height:36px}}
+.message-body > .message-content + .message-content{margin-top:10px}

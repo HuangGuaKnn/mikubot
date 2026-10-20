@@ -1,3 +1,4 @@
+"""Explicit legacy-length compatibility; default model mode has separate tests."""
 import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
@@ -9,9 +10,15 @@ from qunyu.db import Store
 from mikubot.chat import ChatService
 from mikubot.official import OfficialBridge
 from mikubot.onebot import OneBotBridge
-from mikubot.output import split_output
+from mikubot.output import split_output as configured_split_output
 from mikubot.settings import DEFAULTS
 from mikubot.social import SocialEngine
+
+
+def split_output(text, config=None, scope=None):
+    config = deepcopy(config or {})
+    config.setdefault('output', {}).setdefault('mode', 'length')
+    return configured_split_output(text, config, scope)
 
 
 @pytest.fixture
@@ -74,7 +81,7 @@ class Settings:
     def __init__(self):
         self.config = deepcopy(DEFAULTS)
         self.config['onebot'].update(chat_policy="whitelist", enabled=True, owner_ids=['101'], allowed_groups=['202'])
-        self.config['output'].update(target_chars=30, max_chars=40, interval_ms=0)
+        self.config['output'].update(mode='length', target_chars=30, max_chars=40, interval_ms=0)
 
     def get(self):
         return deepcopy(self.config)

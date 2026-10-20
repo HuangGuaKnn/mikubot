@@ -1,12 +1,14 @@
-"""Sentence-aware speech chunks. Protected text stays whole; empty chunks are omitted."""
+"""Model-authored message boundaries, plus bounded transport protection."""
 from __future__ import annotations
 
 import re
+import json
 import unicodedata
 
 
-DEFAULT_OUTPUT = {'enabled': True, 'target_chars': 160, 'max_chars': 320,
+DEFAULT_OUTPUT = {'enabled': True, 'mode': 'model', 'target_chars': 160, 'max_chars': 320,
                   'interval_ms': 600, 'max_parts': 8, 'platform_max_chars': 1800}
+_PROTECTED_TEXT = r'(?P<fence>`{3,}|~{3,})[\s\S]*?(?:(?P=fence)|$)|`[^`\n]+`|\[[^\]\n]*\]\([^\s)]*\)|https?://[^\s<>]+'
 
 
 class OutputLimitError(ValueError):
@@ -24,7 +26,7 @@ def strip_memory_citations(text, memory_ids, *, user_text=''):
         if isinstance(key, str) and len(key) >= 8:
             tokens.update((key.casefold(), key[:8].casefold()))
     if not tokens: return text
-    protected = re.compile(r'```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`|\[[^\]\n]*\]\([^\s)]*\)|https?://[^\s<>]+')
+    protected = re.compile(_PROTECTED_TEXT)
     citation = re.compile(r'\[([^\[\]\n]{1,400})\]|【([^【】\n]{1,400})】')
     def remove(match):
         marker = match.group()
@@ -57,6 +59,8 @@ def output_config(config, scope=None):
         value = scope.get('output_' + key, (scope.get('settings') or {}).get('output_' + key))
         if value is not None:
             result[key] = value
+    if result['mode'] not in ('model', 'length'):
+        raise ValueError('输出分段模式无效')
     result['target_chars'] = max(20, min(2000, int(result['target_chars'])))
     result['max_chars'] = max(result['target_chars'], min(4000, int(result['max_chars'])))
     result['max_parts'] = max(1, min(30, int(result['max_parts'])))
@@ -67,7 +71,7 @@ def output_config(config, scope=None):
 
 def _atoms(text):
     # Markdown links, fenced and inline code, and bare URLs are indivisible.
-    protected = re.compile(r'```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`|\[[^\]\n]*\]\([^\s)]*\)|https?://[^\s<>]+')
+    protected = re.compile(_PROTECTED_TEXT)
     position = 0
     for match in protected.finditer(text):
         yield from _graphemes(text[position:match.start()])
@@ -95,18 +99,67 @@ def _graphemes(text):
         yield cluster
 
 
+def generation_instructions(config, scope=None):
+    options = output_config(config, scope)
+    if not options['enabled']:
+        return '\n消息格式：本次只发送一条完整消息，不主动拆成多条。可保留必要的列表、代码和文档排版。'
+    if options['mode'] == 'length': return ''
+    return ('\n【消息发送格式】在生成回复时自行决定每条独立消息的边界。需要另发一条时，使用一个空行（两个换行）分隔；'
+            '单个换行只是同一条消息内的排版。可以只回复几个字、一句话，也可以在一条里说好几句；不要固定段数，不要为凑长度拆开一句话。'
+            f'本次最多建议{options["max_parts"]}条，能一条说清就只发一条。'
+            '不要为了分段添加序号、JSON包装、特殊分隔符或解释文字。完整代码用代码围栏包住，代码内空行不是消息边界；链接保持完整。'
+            '用户要求可直接复制的JSON、表格、完整文档或原文时，保持其完整格式放在一条中，不为聊天节奏打断。')
+
+
+def model_reply_parts(text, config=None, scope=None):
+    """Read only authored blank-line boundaries; never infer stops from length.
+
+    Whitespace-only messages are ignored. Code, links and inline code are
+    opaque, and a complete JSON value remains one copyable message. A flood of
+    authored paragraphs is folded into the final allowed message without loss.
+    """
+    text = str(text)
+    options = output_config(config or {}, scope)
+    if not text.strip(): return []
+    if not options['enabled']: return [text]
+    if options['mode'] == 'length': return _length_parts(text, options)
+    if text.lstrip().startswith(('{', '[')):
+        try:
+            if isinstance(json.loads(text), (dict, list)): return [text.strip()]
+        except (ValueError, RecursionError): pass
+    pattern = re.compile(rf'(?P<protected>{_PROTECTED_TEXT})|(?P<boundary>(?:\r?\n[ \t]*){{2,}})')
+    parts, start = [], 0
+    for match in pattern.finditer(text):
+        if match.lastgroup != 'boundary': continue
+        part = text[start:match.start()].strip()
+        if part: parts.append(part)
+        start = match.end()
+    tail = text[start:].strip()
+    if tail: parts.append(tail)
+    maximum = options['max_parts']
+    if len(parts) > maximum:
+        parts[maximum-1:] = ['\n\n'.join(parts[maximum-1:])]
+    return parts
+
+
 def split_output(text, config=None, scope=None):
+    """Preserve model choices; split further only at the actual transport cap."""
+    options = output_config(config or {}, scope)
+    return [chunk for part in model_reply_parts(text, config, scope)
+            for chunk in _hard_parts(part, options['platform_max_chars']) if chunk.strip()]
+
+
+def _length_parts(text, options):
     """Prefer natural stops near target length, with no fixed number of sentences.
 
     An oversized protected atom or the final max-parts tail may exceed max_chars.
     Preserving code/links and complete content takes precedence over the soft cap.
     """
     text = str(text)
-    options = output_config(config or {}, scope)
     if not text:
         return []
     if not options['enabled'] or len(text) <= options['target_chars']:
-        return [part for part in _hard_parts(text, options['platform_max_chars']) if part.strip()]
+        return [text] if text.strip() else []
     atoms = list(_atoms(text))
     parts = []
     while atoms and len(parts) < options['max_parts'] - 1:
@@ -160,7 +213,7 @@ def split_output(text, config=None, scope=None):
             parts[-1] += tail
         else:
             parts.append(tail)
-    return [chunk for part in parts for chunk in _hard_parts(part, options['platform_max_chars']) if chunk.strip()]
+    return [part for part in parts if part.strip()]
 
 
 def _hard_parts(text, limit):

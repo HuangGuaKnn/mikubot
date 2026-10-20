@@ -63,7 +63,7 @@ bash start.sh --data-dir "$HOME/mikubot-data"
 
 ## 隔离、恢复与验收
 
-新安装电脑任务默认选择Docker隔离，须先准备本机Linux容器引擎和`python:3.12-slim`；不可用就停止，不降级到宿主。旧本机模式保留；本机Shell/Python具有当前系统账户权限。文件工具和MCP与代码容器的边界见[隔离说明](DEPLOYMENT_AND_SAFETY.md#代码隔离与任务恢复)。
+新安装电脑任务默认选择Docker隔离，须先准备本机Linux容器引擎和按固定摘要锁定的官方Python镜像（完整pull命令见“检查隔离环境”及隔离说明）；不可用就停止，不降级到宿主。旧本机模式保留；本机Shell/Python具有当前系统账户权限。文件工具和MCP与代码容器的边界见[隔离说明](DEPLOYMENT_AND_SAFETY.md#代码隔离与任务恢复)。
 
 蒸馏任务支持按检查点继续；电脑命令不自动重放。真实本地网络回归、可选真实QQ/模型验收、Docker隔离脚本和持续集成矩阵见[验收入口](DEPLOYMENT_AND_SAFETY.md#验收入口)。替身通过不代表真实QQ账号、模型质量、Linux/Docker或公网证书验收通过。
 
@@ -73,6 +73,6 @@ bash start.sh --data-dir "$HOME/mikubot-data"
 .\.venv\Scripts\python.exe -m mikubot --replay .\evals\routing-synthetic.json --replay-output .\replay-report.json
 ```
 
-真实模式显式开启后可能计费，见[回放说明](REPLAY-v0.6.md)。源码发行白名单已同步部署文件、核心与兼容包；本次没有重建安装包、提交、推送或发布。以后获准构建时使用`scripts/package_source.py`和`scripts/build.ps1`。
+真实模式显式开启后可能计费，见[回放说明](archive/REPLAY-v0.6.md)。源码发行白名单已同步部署文件、核心与兼容包；本次没有重建安装包、提交、推送或发布。以后获准构建时使用`scripts/package_source.py`和`scripts/build.ps1`。
 
 源码可在设置中选择GitHub发行版并下载源码包，但不会自动切换分支或覆盖工作区。更换代码请在新目录准备依赖，保持同一个`--data-dir`；详见[更新指南](UPDATES.md)。

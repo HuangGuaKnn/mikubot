@@ -20,6 +20,7 @@ import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
+from .timezones import config_zone
 
 
 UTC = timezone.utc
@@ -174,6 +175,7 @@ class Store:
     """A single connection serialized with an RLock, safe across API threads."""
 
     def __init__(self, data_dir: Path):
+        self._timezone_settings = None
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.data_dir / "qunyu.db"
@@ -193,6 +195,7 @@ class Store:
                 id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, user_id TEXT NOT NULL,
                 role TEXT NOT NULL, created_at TEXT NOT NULL, data TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS messages_scope_time ON messages(scope_id, created_at);
+            CREATE INDEX IF NOT EXISTS messages_time ON messages(created_at);
             CREATE TABLE IF NOT EXISTS memories (
                 id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, user_id TEXT NOT NULL,
                 kind TEXT NOT NULL, status TEXT NOT NULL, visibility TEXT NOT NULL,
@@ -294,6 +297,9 @@ class Store:
         )
         return json.loads(values[-1])
 
+    def configure_timezone(self, settings):
+        self._timezone_settings = settings
+
     def stats(self) -> dict:
         with self._lock:
             result = {}
@@ -306,7 +312,8 @@ class Store:
             today = self.usage_totals()
             result["cost_today"] = today["cost"]
             result["tokens_today"] = today["tokens"]
-            start = datetime.combine(datetime.now(HONG_KONG).date(), datetime.min.time(), tzinfo=HONG_KONG)
+            zone = config_zone(self._timezone_settings)
+            start = datetime.combine(datetime.now(zone).date(), datetime.min.time(), tzinfo=zone)
             unknown = self._conn.execute(
                 "SELECT COUNT(*) FROM usage WHERE created_at>=? AND created_at<? "
                 "AND (json_extract(data,'$.cost_known')=0 OR "
@@ -436,6 +443,8 @@ class Store:
                     if value is None: continue
                     if key == 'enabled':
                         _boolean(value, 'output.enabled')
+                    elif key == 'mode':
+                        if value not in ('model','length'): raise ValueError('output.mode 无效')
                     elif key in {'target_chars','max_chars','interval_ms','max_parts','platform_max_chars'}:
                         lower,upper = {'target_chars':(20,1000),'max_chars':(40,4000),'interval_ms':(0,5000),'max_parts':(1,20),'platform_max_chars':(40,20000)}[key]
                         if type(value) is not int or not lower <= value <= upper:
@@ -1283,15 +1292,15 @@ class Store:
             return [json.loads(row[0]) for row in rows]
 
     def usage_totals(self, scope_id: str | None = None, day: date | datetime | str | None = None) -> dict:
-        """Aggregate the complete Hong Kong calendar day, without list limits.
+        """Aggregate the configured calendar day, without list limits.
 
-        ``day`` defaults to today in UTC+8. Dates and YYYY-MM-DD strings name a
-        Hong Kong date; an aware datetime is converted to that local date.
+        The default remains UTC+8; aware datetimes use the selected timezone.
         """
+        zone = config_zone(self._timezone_settings)
         if day is None:
-            selected = datetime.now(HONG_KONG).date()
+            selected = datetime.now(zone).date()
         elif isinstance(day, datetime):
-            selected = (day.replace(tzinfo=HONG_KONG) if day.tzinfo is None else day.astimezone(HONG_KONG)).date()
+            selected = (day.replace(tzinfo=zone) if day.tzinfo is None else day.astimezone(zone)).date()
         elif isinstance(day, date):
             selected = day
         elif isinstance(day, str):
@@ -1304,7 +1313,7 @@ class Store:
         else:
             raise ValueError("day 必须为日期、时间或 YYYY-MM-DD 字符串")
         try:
-            start = datetime.combine(selected, datetime.min.time(), tzinfo=HONG_KONG)
+            start = datetime.combine(selected, datetime.min.time(), tzinfo=zone)
             start_iso = _iso(start.isoformat(), "day")
             end_iso = _iso((start + timedelta(days=1)).isoformat(), "day")
         except (OverflowError, ValueError) as exc:

@@ -16,11 +16,11 @@ window.MikubotUpdates = (() => {
   function markup() {
     if (!status) return `<h2>版本与更新</h2><p>${e(error || "正在读取本地版本信息…")}</p>${button("重新读取","update-status","","refresh")}`;
     const release=selection(), download=status.download || {}, downloading=download.status==="downloading";
-    const asset=release?.assets?.[selectedKind], disabled=busy || downloading ? " disabled" : "";
+    const asset=release?.assets?.[selectedKind], disabled=busy || downloading || status.automatic_active ? " disabled" : "";
     const relation={newer:"较新版本",current:"当前版本",older:"历史版本"};
     const percent=Math.max(0,Math.min(100,100*Number(download.received || 0)/Math.max(1,Number(download.total || 0))));
     return `<div class="section-title">${icon("refresh")}<div><h2>版本与更新</h2><p>当前版本 ${e(status.current_version)} · ${{installed:"Windows 安装版",portable:"便携部署",source:"源码部署"}[status.mode] || "当前部署"}</p></div></div>
-      <p class="help-caption">从 GitHub 的 iownmmiku/mikubot 读取已发布版本。不会自动下载、安装或切换版本。</p>
+      <p class="help-caption">从 GitHub 的 iownmmiku/mikubot 读取已发布版本。由你选择何时更新；Windows 安装版支持一键下载、校验、静默安装并重新打开。</p>
       <div class="section-actions">${button(busy ? "正在处理…" : "检查 GitHub 版本","update-check","primary","refresh",disabled)}<a class="btn ghost" href="${e(safeReleaseUrl(status.releases_url))}" target="_blank" rel="noopener noreferrer">GitHub 发行页面 ↗</a></div>
       <div class="toggle-field"><div class="toggle-copy"><strong>显示测试版</strong><small>包含标记为预发布的版本，默认关闭。</small></div><label class="switch"><input type="checkbox" id="update-prerelease" aria-label="显示测试版" ${status.include_prerelease ? "checked" : ""}${disabled}><span></span></label></div>
       ${status.checked_at ? `<p class="help-caption">上次检查：${e(fmt(status.checked_at))}。${!status.releases.length ? "本页没有符合筛选条件的发行版。" : "选择版本后查看说明和对应文件。"}</p>` : ""}
@@ -29,15 +29,16 @@ window.MikubotUpdates = (() => {
       <details class="details"><summary>查看 ${e(release.tag)} 发行说明</summary><pre class="release-update-notes">${e(release.notes)}</pre><a href="${e(safeReleaseUrl(release.url))}" target="_blank" rel="noopener noreferrer">在 GitHub 查看此版本 ↗</a></details>
       ${release.relation==="older" ? notice("历史版本可以下载。请先备份数据，在独立目录手动部署；不支持直接覆盖降级。","warning") : ""}
       <p class="help-caption">${asset ? `${e(asset.name)} · ${size(asset.size)} · ${asset.verified_download_available ? "下载后校验 SHA-256" : "缺少校验信息，无法在软件内下载"}` : "此发行版没有对应文件。"}</p>
-      ${button("下载所选版本","update-download","","download",`${disabled}${!asset?.verified_download_available ? " disabled" : ""}`)}` : ""}
+      <div class="section-actions">${status.install_supported && status.local_install_allowed && release.relation!=="older" && release.assets.installer?.verified_download_available ? button("一键更新到 "+release.tag,"update-apply","primary","refresh",disabled) : ''}${button("仅下载所选文件","update-download","","download",`${disabled}${!asset?.verified_download_available ? " disabled" : ""}`)}</div>` : ""}
       ${status.checked_at ? `<div class="section-actions">${status.page>1 ? button("上一页版本","update-previous","ghost small","",disabled) : ""}${status.has_more ? button("下一页版本","update-next","ghost small","",disabled) : ""}</div>` : ""}
       ${download.status!=="idle" ? `<div class="local-connector-result" aria-live="polite"><strong>${e(download.message || download.status)}</strong><p>${e(download.name || "")}</p>${downloading ? `<progress aria-label="版本下载进度" value="${percent}" max="100"></progress><p>${size(download.received)} / ${size(download.total)}</p>${button("取消下载","update-cancel","ghost small","stop")}` : ""}${download.status==="ready" ? `<a class="btn" href="${e(download.file_url)}" download>保存已校验文件</a> ${download.can_install && status.local_install_allowed ? button("退出并启动安装","update-install","primary","refresh") : `<p class="help-caption">${status.mode==="source" ? "请将源码包解压到新目录，按源码指南部署并继续使用原数据目录；当前源码与未提交改动不会被覆盖。" : status.mode==="portable" ? "请完整退出后将便携包解压到新目录，继续使用原数据目录。" : "请在运行电脑上手动安装；旧版本需先备份数据并检查兼容性。"}</p>`}` : ""}</div>` : ""}
-      ${error ? notice(error,"warning") : ""}<p class="help-caption">下载保存在数据目录的 updates 文件夹。安装器保留独立的数据目录；升级前建议保存完整数据副本。</p>`;
+      ${status.install_result?.message?notice(status.install_result.message,status.install_result.status==='completed'?'':'warning'):''}${error ? notice(error,"warning") : ""}<p class="help-caption">下载保存在数据目录的 updates 文件夹。自动更新结果与安装日志保存在 install-result.json、install.log。安装器保留独立的数据目录；升级前建议保存完整数据副本。源码和便携部署继续手动更新。</p>`;
   }
   function paint() { const node=$("#updates-section");if(node)node.innerHTML=markup(); }
   function schedule() {
     stop();
-    if (!$("#updates-section") || !state.authenticated || status?.download?.status!=="downloading")return;
+    const section=$("#updates-section"),dialog=$("#modal");
+    if (!section || !state.authenticated || state.stopped || dialog?.contains?.(section) && !dialog.open || status?.download?.status!=="downloading" && !status?.automatic_active)return;
     timer=setTimeout(async()=>{try{if(!document.hidden){status=await api("/api/updates");paint();}}catch(exc){error=exc.message;paint();}finally{schedule();}},1000);
   }
   async function settingsPanel() {
@@ -47,10 +48,17 @@ window.MikubotUpdates = (() => {
   async function action(action,target) {
     if (!action.startsWith("update-"))return false;
     if (action === "update-open") {
-      openModal("版本与更新","检查、选择并下载 GitHub 上已发布的版本。",await settingsPanel());
+      openModal("版本与更新","选择 GitHub 发行版本；Windows 安装版可一键更新。",await settingsPanel());
       $("#modal").classList.add("modal-wide");schedule();return true;
     }
     if (busy) return true;
+    if(action==='update-apply'){
+      const release=selection();
+      if(!release || !status.local_install_allowed)throw new Error('请在运行电脑上检查并选择发行版本。');
+      await confirmAction('一键更新到 '+release.tag+'？','将下载并校验 Windows 安装包，随后退出、静默安装并重新打开，继续使用当前数据目录。请先完成后台任务并保存数据副本。',async()=>{
+        status=await api('/api/updates/apply',{method:'POST',body:{release_id:release.id}});paint();schedule();
+      },'开始更新');return true;
+    }
     if (action==="update-install") {
       const download=status?.download;
       if(!download?.can_install || !status.local_install_allowed)throw new Error("请在运行电脑上检查安装方式与下载状态。");

@@ -143,7 +143,7 @@ def test_blacklist_revocation_stops_remaining_chunks_and_memory_access(tmp_path)
     async def scenario():
         settings = Settings(tmp_path)
         settings.update({'onebot': {'enabled': True, 'access_token': 'isolated-fixture-token'},
-                         'output': {'target_chars': 20, 'max_chars': 40, 'interval_ms': 0}})
+                         'output': {'mode': 'length', 'target_chars': 20, 'max_chars': 40, 'interval_ms': 0}})
         store = Store(tmp_path)
         scope = 'qq:group:456'
         store.upsert_scope({'id': scope, 'plan_enabled': False})

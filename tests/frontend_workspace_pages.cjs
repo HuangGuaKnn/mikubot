@@ -31,6 +31,10 @@ async function main(){
   assert.equal(ui.recommendChatModel(['deepseek-reasoner','deepseek-chat'],'deepseek-chat'),'deepseek-chat');
   const html=await ui.renderModels();assert.match(html,/模型供应商/);assert.match(html,/chat-a/);assert.match(html,/&lt;script&gt;bad/);assert.ok(!html.includes("<script>"));
   assert.match(await ui.chatModelControl(),/继承全局聊天模型/);
+  await ui.handleAction("edit-catalog-model",{dataset:{id:"m1"}});
+  assert.match(modal[2],/name="timeout_seconds" value="90"/);
+  await ui.handleSubmit("catalog-model",{values:{id:"m1",name:"Chat",temperature:"0.7",input_price:"0",output_price:"0",vision:false,tools:true,timeout_seconds:"240"}});
+  assert.equal(calls.at(-1)[0],"/api/model-catalog/models/m1");assert.equal(calls.at(-1)[1].body.timeout_seconds,240);
   await ui.handleChange({id:"chat-model-id",value:"m1"});assert.equal(calls.at(-1)[0],"/api/scopes/web%3Atest");assert.deepEqual(plain(calls.at(-1)[1].body),{model_id:"m1"});
   await ui.handleChange({id:"chat-model-id",value:""});assert.deepEqual(plain(calls.at(-1)[1].body),{model_id:""});
   const discovery={innerHTML:""};nodes.set("#source-discovery",discovery);

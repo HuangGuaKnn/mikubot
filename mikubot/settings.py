@@ -15,24 +15,26 @@ import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 from .profiles import DEFAULT_PROFILES
+from .timezones import config_zone
 
 
 DEFAULTS = {
     'bot_profiles': DEFAULT_PROFILES,
     'model': {'base_url': '', 'model': '', 'api_key': '', 'vision': False,
-              'temperature': 0.7, 'input_price': 0.0, 'output_price': 0.0},
+              'temperature': 0.7, 'input_price': 0.0, 'output_price': 0.0, 'timeout_seconds':90},
     'onebot': {'enabled': False, 'adapter': 'napcat', 'ws_url': '', 'access_token': '',
                'owner_ids': [], 'allowed_users': [], 'allowed_groups': [], 'chat_policy': 'blacklist',
                'blocked_users': [], 'blocked_groups': [], 'max_message_chars': 0},
     'qq_official': {'enabled': False, 'app_id': '', 'app_secret': '', 'allowed_groups': [], 'allowed_users': [],
                     'chat_policy': 'blacklist', 'blocked_users': [], 'blocked_groups': [], 'max_message_chars': 0},
     'budget': {'daily_tokens': 100000, 'daily_cost': 0.0},
+    'time': {'timezone': 'Asia/Shanghai'},
     'memory': {'semantic_enabled': False, 'embedding_model': '', 'embedding_price': 0.0,
                'top_k': 8, 'auto_review': True, 'organization_enabled': True},
     'planner': {'min_interval_ms':1200, 'daily_calls':300, 'daily_tokens':12000, 'max_age_ms':15000,
                 'group_batch_ms':1500,'group_batch_messages':4},
     'stickers': {'enabled':True,'collect_enabled':True,'collect_probability':0.1,'send_enabled':True,
-                 'send_probability':0.1,'model_id':'','min_confidence':0.85,'daily_recognitions':30,'max_items':1000},
+                 'send_probability':0.1,'model_id':'','min_confidence':0.85,'daily_recognitions':30,'daily_model_calls':60,'max_items':1000},
     'scheduler': {'model_concurrency':1,'model_queue_limit':32,'background_queue_limit':16,'scope_queue_limit':8},
     'access': {'administrators': []},
     'webui': {'remote_enabled': False, 'host': '0.0.0.0', 'port': 8765, 'allowed_hosts': [], 'public_url': '', 'require_https':True, 'trusted_proxy_ips':[]},
@@ -42,7 +44,7 @@ DEFAULTS = {
     'mcp_servers': [],
     'identity': {'name':'初音未来','aliases':['初音','miku'], 'respond_to_at':True,'respond_to_reply':True,'respond_to_name':True,
                  'planner_enabled':True,'proactive_enabled':True},
-    'output': {'enabled':True,'target_chars':160,'max_chars':320,'interval_ms':600,'max_parts':8,'platform_max_chars':1800},
+    'output': {'enabled':True,'mode':'model','target_chars':160,'max_chars':320,'interval_ms':600,'max_parts':8,'platform_max_chars':1800},
     'exploration': {'enabled':False,'interval_hours':24,'daily_searches':6,'max_results':4,'valid_days':90},
     'routing': {'chat': '', 'planner':'', 'memory': '', 'gate': '', 'summary': '', 'embedding': '', 'fallback': []},
     'context': {'enabled': False, 'trigger_messages': 60, 'max_chars': 18000, 'keep_recent': 24},
@@ -440,6 +442,8 @@ class Settings:
                 self._validate_model_url(candidate['base_url'])
                 candidate['model'] = str(candidate['model']).strip()[:160]
                 candidate['api_key'] = str(candidate['api_key'])
+                if type(candidate['timeout_seconds']) is not int or not 5 <= candidate['timeout_seconds'] <= 600:
+                    raise ValueError('模型等待超时须为5—600秒的整数')
                 for key, low, high in (('temperature', 0, 2), ('input_price', 0, 1000000), ('output_price', 0, 1000000)):
                     try:
                         candidate[key] = float(candidate[key])
@@ -452,6 +456,7 @@ class Settings:
                         raise ValueError('模型能力开关须为布尔值')
                 if 'name' in candidate:
                     candidate['name'] = str(candidate['name']).strip()[:80] or candidate['id']
+            config_zone(updated)
             routing = updated['routing']
             ids = {x['id'] for x in updated['providers']}
             for key in ('chat', 'planner', 'memory', 'gate', 'summary', 'embedding'):
@@ -490,8 +495,8 @@ class Settings:
             for key in ('collect_probability','send_probability','min_confidence'):
                 if isinstance(stickers[key],bool) or not isinstance(stickers[key],(int,float)) or not math.isfinite(stickers[key]) or not 0<=stickers[key]<=1:
                     raise ValueError('表情包概率须在0到1之间')
-            for key,maximum in (('daily_recognitions',1000),('max_items',5000)):
-                if type(stickers[key]) is not int or not (0 if key=='daily_recognitions' else 1)<=stickers[key]<=maximum:
+            for key,maximum in (('daily_recognitions',1000),('daily_model_calls',10000),('max_items',5000)):
+                if type(stickers[key]) is not int or not (1 if key=='max_items' else 0)<=stickers[key]<=maximum:
                     raise ValueError('表情包数量配置无效')
             if not isinstance(stickers['model_id'],str) or stickers['model_id'] and stickers['model_id']!='default' and stickers['model_id'] not in ids:
                 raise ValueError('表情包识图模型不存在')
@@ -509,6 +514,7 @@ class Settings:
                     except (TypeError,ValueError) as exc: raise ValueError('长度或频率格式错误') from exc
                     if not minimum<=value<=maximum: raise ValueError(f'{key}超出范围{minimum}—{maximum}')
                     updated[section][key]=value
+            if updated['output'].get('mode') not in ('model','length'): raise ValueError('输出分段模式须为model或length')
             if updated['output']['target_chars']>updated['output']['max_chars']: raise ValueError('分段目标长度不能超过最大长度')
             memory = updated['memory']
             for key in ('semantic_enabled', 'auto_review', 'organization_enabled'):
@@ -601,6 +607,8 @@ class Settings:
             if not isinstance(computer['workspace'], str) or len(computer['workspace']) > 2000 or '\x00' in computer['workspace']:
                 raise ValueError('电脑任务工作目录格式不正确')
             computer['workspace'] = computer['workspace'].strip()
+            if computer['runtime'] == 'docker' and ',' in computer['workspace']:
+                raise ValueError('Docker 沙箱工作目录不能含逗号，请另选专用文件夹')
             for key, low, high in (('max_steps',1,100),('timeout_seconds',1,600),('max_output_chars',1000,100000)):
                 if type(computer[key]) is not int or not low <= computer[key] <= high:
                     raise ValueError(f'电脑任务 {key}须为{low}—{high}的整数')

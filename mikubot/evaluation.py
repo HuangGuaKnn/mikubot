@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from .chat import ChatService
 from .db import Store
 from .settings import DEFAULTS, Settings
-from .provider import Provider, ProviderError
+from .provider import Provider, ProviderError, is_budget_exceeded
 
 
 class ReplayProvider(Provider):
@@ -30,7 +30,7 @@ class ReplayProvider(Provider):
             return await super().complete(*args, **kwargs)
         except ProviderError as exc:
             reason = str(exc)
-            if re.search(r'预算.{0,12}(?:不足|已达|已用完|上限)|预算已不足|额度不足|次数已达', reason):
+            if is_budget_exceeded(exc):
                 self.budget_reason = ('Planner 次数或 Token 预算不足' if 'Planner' in reason else
                                       '费用预算不足' if '费用' in reason else '模型 Token 预算或服务额度不足')
             raise

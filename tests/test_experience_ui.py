@@ -13,6 +13,20 @@ def test_experience_ui_safety_and_api_interactions():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_plugin_and_statistics_page_dispatch_and_metrics():
+    node = shutil.which('node')
+    if not node: pytest.skip('Optional frontend regression requires Node.js')
+    result = subprocess.run([node,str(Path(__file__).with_name('frontend_plugins_statistics.cjs'))],capture_output=True,text=True,encoding='utf-8',timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_model_output_configuration_and_stored_message_boundaries():
+    node = shutil.which('node')
+    if not node: pytest.skip('Optional frontend regression requires Node.js')
+    result = subprocess.run([node,str(Path(__file__).with_name('frontend_model_output.cjs'))],capture_output=True,text=True,encoding='utf-8',timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_password_ui_bootstrap_login_and_recovery_boundaries():
     node = shutil.which('node')
     if not node:
