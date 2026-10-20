@@ -357,7 +357,7 @@ class UpdateManager:
                 raise ValueError('更新工作文件包含链接，未启动安装')
             worker.write_text((Path(__file__).parent/'resources'/'update-worker.ps1').read_text('utf-8'), 'utf-8-sig')
             config.write_text(json.dumps({'installer': str(path), 'sha256': self.download['sha256'], 'parent_pid': os.getpid(), 'download_id': self.download['id'],
-                'arguments': subprocess.list2cmdline(command[1:]+['--silent','--no-launch']),
+                'arguments': subprocess.list2cmdline(command[1:]+['--silent','--no-launch','--no-shortcuts']),
                 'application': str(target/'mikubot.exe'), 'launch_arguments': subprocess.list2cmdline(['--data-dir',str(self.data_dir)]),
                 'result': str(folder/'install-result.json'), 'log': str(folder/'install.log')}, ensure_ascii=False), 'utf-8')
             # Use the system copy, not a powershell.exe found through PATH.

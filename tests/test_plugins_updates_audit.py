@@ -215,6 +215,7 @@ async def test_automatic_update_worker_preserves_paths_and_uses_silent_installer
     assert '-File' in arguments and '-ConfigPath' in arguments
     config = json.loads((item.folder/'update-worker.json').read_text('utf-8'))
     assert '--silent' in config['arguments'] and '--no-launch' in config['arguments'] and '--wait-pid' in config['arguments']
+    assert '--no-shortcuts' in config['arguments']  # Updating preserves existing user shortcut choices.
     assert config['application'] == str(target/'mikubot.exe')
     assert str(item.data_dir) in config['arguments']
     assert (item.folder/'update-worker.ps1').read_bytes().startswith(b'\xef\xbb\xbf')
