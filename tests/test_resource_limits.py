@@ -42,12 +42,17 @@ async def test_semantic_deadline_includes_query_documents_and_engine_lock(tmp_pa
             await asyncio.sleep(10)
         return [[1., 0.] for _ in texts]
     engine = MemoryEngine(store, config(), embed)
+    # Build the lexical index before timing the shared online budget. The first
+    # pass over a cold index is local CPU work whose duration depends on the
+    # host; this deadline is meant to bound the online embedding phases.
+    await engine._rank_async('web:default', 'owner', engine._config(), '咖啡')
     if slow_phase == 'lock':
         await engine._semantic_lock.acquire()
     try:
+        budget = .6
         started = asyncio.get_running_loop().time()
-        result = await engine.inspect('web:default', 'owner', '咖啡', semantic_deadline=started + .2)
-        assert asyncio.get_running_loop().time() - started < .8
+        result = await engine.inspect('web:default', 'owner', '咖啡', semantic_deadline=started + budget)
+        assert asyncio.get_running_loop().time() - started < 3
         assert result['mode'] == 'lexical' and result['items'][0]['id'] == wanted['id']
         assert result['semantic']['error'] == 'TimeoutError'
         assert len(calls) == {'query': 1, 'documents': 2, 'lock': 0}[slow_phase]

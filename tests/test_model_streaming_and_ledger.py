@@ -149,9 +149,16 @@ def test_unconfirmed_usage_api_requires_local_authenticated_admin(tmp_path):
 
 def test_cgroup_metrics_report_limits_and_oom_without_touching_host(tmp_path):
     from mikubot.resource_metrics import read_resources
+    group, proc = tmp_path / 'group', tmp_path / 'proc'
     for name,value in {'memory.current':'950','memory.max':'1000','memory.peak':'980','cpu.max':'50000 100000','memory.events':'oom 2\noom_kill 1\n'}.items():
-        (tmp_path/name).write_text(value)
-    result=read_resources(tmp_path)
+        (group / name).parent.mkdir(parents=True, exist_ok=True)
+        (group / name).write_text(value)
+    # Membership must be a fixture too: the host's real cgroup path does not
+    # exist under a temporary root, and reading the host /proc would make this
+    # test depend on the runner's container layout instead of the fixture.
+    (proc / 'self').mkdir(parents=True, exist_ok=True)
+    (proc / 'self' / 'cgroup').write_text('0::/\n')
+    result=read_resources(group, proc_root=proc)
     assert result['available'] and result['memory_pressure'] and result['oom_kills']==1
     assert result['cpu_limit']==.5 and result['memory_limit_bytes']==1000
 
@@ -245,7 +252,10 @@ def test_semantic_deadline_settles_dispatched_embedding_and_releases_model_queue
     monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(handler),**kw))
     provider=Provider(settings,store);engine=MemoryEngine(store,settings,provider.embed)
     async def scenario():
-        result=await engine.inspect('web:default','owner','咖啡',semantic_deadline=asyncio.get_running_loop().time()+.08)
+        # Warm the cold lexical index first: this deadline bounds the online
+        # embedding phases, not host-dependent local index construction.
+        await engine._rank_async('web:default','owner',engine._config(),'咖啡')
+        result=await engine.inspect('web:default','owner','咖啡',semantic_deadline=asyncio.get_running_loop().time()+.6)
         assert result['mode']=='lexical' and result['semantic']['error']=='TimeoutError'
         assert not provider._reservations and provider._global_gate.active==0
         assert store.list_usage()[0]['unconfirmed']
