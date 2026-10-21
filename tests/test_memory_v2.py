@@ -22,7 +22,7 @@ def store(tmp_path):
 
 
 def settings(semantic=False, model="embedding-test"):
-    return {"memory": {"semantic_enabled": semantic, "embedding_model": model, "top_k": 8},
+    return {"memory": {"semantic_enabled": semantic, "embedding_model": model, "top_k": 8, "background_indexing": False},
             "model": {"base_url": "https://provider.invalid/v1", "api_key": "never-store-this-key"}}
 
 

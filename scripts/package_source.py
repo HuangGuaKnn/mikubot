@@ -14,7 +14,7 @@ ROOT_FILES = {
     '.gitignore', 'README.md', 'RELEASE_NOTES.md', 'TEST_REPORT.md', 'CONTRACT.md',
     'THIRD_PARTY_NOTICES.md', 'LICENSE',
     'pyproject.toml', 'requirements.txt', 'requirements-dev.txt', 'requirements-lock.txt', 'requirements-server.txt', 'requirements-desktop.txt',
-    'Dockerfile', 'compose.yaml', '.dockerignore',
+    'Dockerfile', 'compose.yaml', 'compose.low-memory.yaml', '.dockerignore',
     'start.ps1', 'start.sh', 'launcher.py', 'installer_launcher.py',
 }
 TREE_TYPES = {

@@ -21,7 +21,9 @@ from .timezones import config_zone
 DEFAULTS = {
     'bot_profiles': DEFAULT_PROFILES,
     'model': {'base_url': '', 'model': '', 'api_key': '', 'vision': False,
-              'temperature': 0.7, 'input_price': 0.0, 'output_price': 0.0, 'timeout_seconds':90},
+              'temperature': 0.7, 'input_price': 0.0, 'output_price': 0.0, 'timeout_seconds':90,
+              'stream_mode':'auto', 'first_token_timeout_seconds':90, 'total_timeout_seconds':300,
+              'timeout_fallback':False},
     'onebot': {'enabled': False, 'adapter': 'napcat', 'ws_url': '', 'access_token': '',
                'owner_ids': [], 'allowed_users': [], 'allowed_groups': [], 'chat_policy': 'blacklist',
                'blocked_users': [], 'blocked_groups': [], 'max_message_chars': 0},
@@ -30,12 +32,17 @@ DEFAULTS = {
     'budget': {'daily_tokens': 100000, 'daily_cost': 0.0},
     'time': {'timezone': 'Asia/Shanghai'},
     'memory': {'semantic_enabled': False, 'embedding_model': '', 'embedding_price': 0.0,
-               'top_k': 8, 'auto_review': True, 'organization_enabled': True},
+               'top_k': 8, 'auto_review': True, 'organization_enabled': True,
+               'term_cache_mb':64, 'read_concurrency':2, 'read_queue_limit':32,
+               'semantic_timeout_seconds':8, 'background_indexing':True},
     'planner': {'min_interval_ms':1200, 'daily_calls':300, 'daily_tokens':12000, 'max_age_ms':15000,
                 'group_batch_ms':1500,'group_batch_messages':4},
     'stickers': {'enabled':True,'collect_enabled':True,'collect_probability':0.1,'send_enabled':True,
                  'send_probability':0.1,'model_id':'','min_confidence':0.85,'daily_recognitions':30,'daily_model_calls':60,'max_items':1000},
-    'scheduler': {'model_concurrency':1,'model_queue_limit':32,'background_queue_limit':16,'scope_queue_limit':8},
+    'scheduler': {'model_concurrency':1,'model_queue_limit':32,'background_queue_limit':16,'scope_queue_limit':8,
+                  'global_model_concurrency':2,'global_model_queue_limit':32,
+                  'request_concurrency':8,'request_queue_limit':16,'request_max_mb':32,
+                  'parsing_concurrency':1,'parsing_queue_limit':4},
     'access': {'administrators': []},
     'webui': {'remote_enabled': False, 'host': '0.0.0.0', 'port': 8765, 'allowed_hosts': [], 'public_url': '', 'require_https':True, 'trusted_proxy_ips':[]},
     'computer': {'enabled':False, 'runtime':'docker', 'workspace':'', 'max_steps':12, 'timeout_seconds':60, 'max_output_chars':16000, 'approval_mode':'automatic', 'allow_external_tools':False},
@@ -44,10 +51,12 @@ DEFAULTS = {
     'mcp_servers': [],
     'identity': {'name':'初音未来','aliases':['初音','miku'], 'respond_to_at':True,'respond_to_reply':True,'respond_to_name':True,
                  'planner_enabled':True,'proactive_enabled':True},
-    'output': {'enabled':True,'mode':'model','target_chars':160,'max_chars':320,'interval_ms':600,'max_parts':8,'platform_max_chars':1800},
+    'output': {'enabled':True,'mode':'model','target_chars':160,'max_chars':320,'interval_ms':600,'max_parts':8,'platform_max_chars':1800,
+               'reply_max_chars':0,'message_max_chars':0,'remove_parentheses':False},
     'exploration': {'enabled':False,'interval_hours':24,'daily_searches':6,'max_results':4,'valid_days':90},
     'routing': {'chat': '', 'planner':'', 'memory': '', 'gate': '', 'summary': '', 'embedding': '', 'fallback': []},
-    'context': {'enabled': False, 'trigger_messages': 60, 'max_chars': 18000, 'keep_recent': 24},
+    'context': {'enabled': False, 'trigger_messages': 60, 'max_chars': 18000, 'keep_recent': 24,
+                'max_input_chars':80000, 'max_history_messages':400, 'max_images':3},
     'paused': False,
 }
 
@@ -446,6 +455,13 @@ class Settings:
                 candidate['api_key'] = str(candidate['api_key'])
                 if type(candidate['timeout_seconds']) is not int or not 5 <= candidate['timeout_seconds'] <= 600:
                     raise ValueError('模型等待超时须为5—600秒的整数')
+                for key, low, high in (('first_token_timeout_seconds',5,600),('total_timeout_seconds',5,1800)):
+                    if type(candidate[key]) is not int or not low <= candidate[key] <= high:
+                        raise ValueError(f'{key}须为{low}—{high}秒的整数')
+                if candidate['stream_mode'] not in ('auto','on','off'):
+                    raise ValueError('流式模式须为auto/on/off')
+                if type(candidate['timeout_fallback']) is not bool:
+                    raise ValueError('超时备用模型开关须为布尔值')
                 for key, low, high in (('temperature', 0, 2), ('input_price', 0, 1000000), ('output_price', 0, 1000000)):
                     try:
                         candidate[key] = float(candidate[key])
@@ -473,6 +489,9 @@ class Settings:
             if any(item.get('model_type') == 'embedding' and item['id'] in fallback for item in updated['providers']):
                 raise ValueError('嵌入模型不能作为聊天备用模型')
             context = updated['context']
+            for key, low, high in (('max_input_chars',2000,200000),('max_history_messages',1,400),('max_images',0,3)):
+                if type(context[key]) is not int or not low <= context[key] <= high:
+                    raise ValueError(f'上下文参数{key}须为{low}—{high}的整数')
             if type(context['enabled']) is not bool:
                 raise ValueError('长对话摘要开关须为布尔值')
             for key, low, high in (('trigger_messages', 20, 400), ('max_chars', 4000, 60000), ('keep_recent', 6, 60)):
@@ -523,8 +542,17 @@ class Settings:
                     updated[section][key]=value
             if updated['output'].get('mode') not in ('model','length'): raise ValueError('输出分段模式须为model或length')
             if updated['output']['target_chars']>updated['output']['max_chars']: raise ValueError('分段目标长度不能超过最大长度')
+            for key, maximum in (('reply_max_chars',20000),('message_max_chars',4000)):
+                value = updated['output'][key]
+                if type(value) is not int or not 0 <= value <= maximum:
+                    raise ValueError(f'输出{key}须为0—{maximum}的整数；0表示不限制')
+            if type(updated['output']['remove_parentheses']) is not bool:
+                raise ValueError('删除括号及内容须为布尔值')
             memory = updated['memory']
-            for key in ('semantic_enabled', 'auto_review', 'organization_enabled'):
+            for key, low, high in (('term_cache_mb',0,256),('read_concurrency',1,8),('read_queue_limit',1,200),('semantic_timeout_seconds',1,120)):
+                if type(memory[key]) is not int or not low <= memory[key] <= high:
+                    raise ValueError(f'记忆参数{key}须为{low}—{high}的整数')
+            for key in ('semantic_enabled', 'auto_review', 'organization_enabled', 'background_indexing'):
                 if type(memory[key]) is not bool:
                     raise ValueError('记忆功能开关须为布尔值')
             memory['embedding_model'] = str(memory['embedding_model']).strip()[:160]
@@ -637,7 +665,10 @@ class Settings:
                 raise ValueError('机器人配置的聊天模型不能使用嵌入模型')
             if updated['stickers']['model_id'] in embedding_ids:
                 raise ValueError('表情包识图需要对话视觉模型，不能使用嵌入模型')
-            for key,low,high in (('model_concurrency',1,8),('model_queue_limit',1,200),('background_queue_limit',1,100),('scope_queue_limit',1,32)):
+            for key,low,high in (('model_concurrency',1,8),('model_queue_limit',1,200),('background_queue_limit',1,100),('scope_queue_limit',1,32),
+                                 ('global_model_concurrency',1,16),('global_model_queue_limit',1,200),
+                                 ('request_concurrency',1,64),('request_queue_limit',1,200),('request_max_mb',1,64),
+                                 ('parsing_concurrency',1,8),('parsing_queue_limit',1,100)):
                 value=updated['scheduler'][key]
                 if type(value) is not int or not low<=value<=high:
                     raise ValueError(f'调度参数 {key}须为{low}—{high}的整数')

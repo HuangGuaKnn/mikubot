@@ -13,6 +13,15 @@ $taskOutput = Join-Path $taskDistributionRoot 'mikubot'
 $taskExistingData = Join-Path $taskOutput 'data'
 $taskBrandAssets = Join-Path $taskRoot 'mikubot\static\assets\brand'
 $taskAppIcon = Join-Path $taskBrandAssets 'mikubot.ico'
+# Some managed Python runtimes load an additional CA policy file from beside
+# ssl.py. Preserve that runtime's policy in the frozen app instead of leaving
+# SSLContext construction dependent on a file outside the distribution.
+$taskSslPolicy = ([string](& $taskPython -c "import ssl; from pathlib import Path; p = Path(ssl.__file__).with_name('codex-rejected-cas.pem'); print(p if p.is_file() else '')")).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Python SSL runtime policy discovery failed' }
+$taskRuntimeData = @()
+if ($taskSslPolicy) {
+    $taskRuntimeData = @('--add-data', ($taskSslPolicy + ';.'))
+}
 if (-not (Test-Path -LiteralPath $taskAppIcon)) {
     & $taskPython scripts/build_icons.py
     if ($LASTEXITCODE -ne 0) { throw '品牌图标生成失败' }
@@ -23,7 +32,7 @@ if (Test-Path -LiteralPath $taskExistingData) {
 if (-not $InstallerOnly) {
     & $taskPython scripts/write_windows_version.py $taskAppVersionFile --version $taskVersion --kind app
     if ($LASTEXITCODE -ne 0) { throw 'Windows 程序版本资源生成失败' }
-    & $taskPython -m PyInstaller --noconfirm --clean --onedir --windowed --name mikubot --icon $taskAppIcon --version-file $taskAppVersionFile --distpath $taskDistributionRoot --add-data 'mikubot/static;mikubot/static' --add-data 'mikubot/resources;mikubot/resources' --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on --hidden-import pystray._win32 --hidden-import webview.platforms.winforms --hidden-import webview.platforms.edgechromium --collect-all webview --collect-all pythonnet --collect-all clr_loader --collect-all botpy --collect-all tzdata launcher.py
+    & $taskPython -m PyInstaller --noconfirm --clean --onedir --windowed --name mikubot --icon $taskAppIcon --version-file $taskAppVersionFile --distpath $taskDistributionRoot --add-data 'mikubot/static;mikubot/static' --add-data 'mikubot/resources;mikubot/resources' @taskRuntimeData --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on --hidden-import pystray._win32 --hidden-import webview.platforms.winforms --hidden-import webview.platforms.edgechromium --collect-all webview --collect-all pythonnet --collect-all clr_loader --collect-all botpy --collect-all tzdata launcher.py
     if ($LASTEXITCODE -ne 0) { throw 'Windows 打包失败' }
 } elseif (-not (Test-Path -LiteralPath (Join-Path $taskOutput 'mikubot.exe'))) {
     throw '请先构建完整程序后再使用 InstallerOnly'
@@ -54,7 +63,7 @@ if (-not $PortableOnly) {
     $taskInstallerName = 'mikubot-' + $taskVersion + '-Windows-Setup'
     & $taskPython scripts/write_windows_version.py $taskInstallerVersionFile --version $taskVersion --kind installer
     if ($LASTEXITCODE -ne 0) { throw 'Windows 安装器版本资源生成失败' }
-    & $taskPython -m PyInstaller --noconfirm --clean --onefile --windowed --name $taskInstallerName --icon $taskAppIcon --version-file $taskInstallerVersionFile --distpath (Join-Path $taskRoot 'dist') --workpath (Join-Path $taskRoot ('build\setup-v' + $taskVersion)) --add-data ($taskInstallerPayload + ';installer_payload') --add-data ($taskBrandAssets + ';mikubot/static/assets/brand') installer_launcher.py
+    & $taskPython -m PyInstaller --noconfirm --clean --onefile --windowed --name $taskInstallerName --icon $taskAppIcon --version-file $taskInstallerVersionFile --distpath (Join-Path $taskRoot 'dist') --workpath (Join-Path $taskRoot ('build\setup-v' + $taskVersion)) --add-data ($taskInstallerPayload + ';installer_payload') --add-data ($taskBrandAssets + ';mikubot/static/assets/brand') @taskRuntimeData installer_launcher.py
     if ($LASTEXITCODE -ne 0) { throw '一键安装包构建失败' }
     $taskInstaller = Join-Path $taskRoot ('dist\' + $taskInstallerName + '.exe')
     foreach ($taskArtifact in @($taskArchive, $taskInstaller)) {

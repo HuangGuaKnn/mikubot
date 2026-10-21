@@ -14,7 +14,8 @@ from .settings import PROVIDER_DEFAULTS, Settings, resolve_model
 
 PURPOSES = ('chat', 'planner', 'memory', 'gate', 'summary', 'embedding')
 _SOURCE_FIELDS = ('name', 'base_url', 'api_key', 'enabled', 'clear_api_key')
-_MODEL_FIELDS = ('name', 'model', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type')
+_MODEL_FIELDS = ('name', 'model', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type',
+                 'stream_mode', 'first_token_timeout_seconds', 'total_timeout_seconds', 'timeout_fallback')
 
 
 class ModelCatalog:
@@ -161,9 +162,15 @@ class ModelCatalog:
                 if (source_id, model) in known:
                     skipped.append(model)
                     continue
-                model_id = 'model_' + hashlib.sha256((source_id + '\0' + model).encode()).hexdigest()[:24]
-                if any(candidate['id'] == model_id for candidate in providers):
-                    raise ValueError('模型 ID 冲突，请调整模型名后重试')
+                base_id = 'model_' + hashlib.sha256((source_id + '\0' + model).encode()).hexdigest()[:24]
+                model_id = base_id
+                # An existing model may have changed its actual upstream name.
+                # Keep its stable ID and allocate a separate ID for the old name.
+                occupied = {candidate['id'] for candidate in providers}
+                suffix = 0
+                while model_id in occupied:
+                    suffix += 1
+                    model_id = base_id + '_' + str(suffix)
                 entry = dict(PROVIDER_DEFAULTS, **{key: value for key, value in item.items() if key in _MODEL_FIELDS})
                 if 'model_type' in payload and 'model_type' not in item:
                     entry['model_type'] = payload['model_type']
@@ -217,6 +224,8 @@ class ModelCatalog:
                 used.append('fallback')
             if self.store and any(scope.get('model_id') == model_id for scope in self.store.list_scopes()):
                 used.append('会话')
+            used.extend('机器人配置：' + profile['name'] for profile in config['bot_profiles']['items']
+                        if profile['values'].get('model_id') == model_id)
             if used:
                 raise ValueError('该模型仍用于 ' + '、'.join(used) + '，请先更换选择再删除')
             self.settings.update({'providers': [item for item in config['providers'] if item['id'] != model_id]})

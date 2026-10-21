@@ -1,4 +1,6 @@
-# mikubot 当前集成约定
+# mikubot 0.1.4 集成约定
+
+本文描述0.1.4源码集成约定，版本发布与下载以GitHub实际公开资产为准；旧版不保证具备本版新增接口。
 
 本文供当前源码开发与接入使用，运行时校验以 `mikubot/api.py`、`experience_api.py` 及对应服务为准。历史内部版本说明归档于 `docs/archive/`，不覆盖当前约定。产品名与核心包均为 `mikubot`；`qunyu` 仅为旧导入和启动兼容层，计划在 **0.3.0** 移除，新集成应直接使用 `mikubot`。
 
@@ -11,6 +13,8 @@ Python 3.11–3.13（推荐3.12），FastAPI、SQLite；正式入口为 `python 
 管理服务默认监听 `127.0.0.1`，显式远程模式必须先配置密码。Windows 默认 WebView2 原生窗口；`--browser` 使用系统浏览器，`--no-browser` 后台运行。桌面与浏览器共用认证与管理 API；反向 WebSocket 另行验证 OneBot 密钥。JSON 错误通过 `detail` 返回。不会根据请求正文中自称管理员的字段授予权限。
 
 启动器通过本机 URL 的 `#bootstrap=` 片段提供初始化证明，前端消费并清理；旧 `#token=` 仅作为相同证明兼容，不直接登录。`POST /api/auth/bootstrap {token}` 仅真正回环连接可换取短期 HttpOnly 初始化 Cookie；已有密码不能靠启动令牌绕过。内部 Bearer 凭据只用于本机控制，不属于远程 WebUI 登录。
+
+本机脚本使用数据目录的 `admin.token` 作为 `Authorization: Bearer <令牌>`，不支持 `X-Token`；真实TCP对端和Host都须为回环。远程管理需密码登录后的Cookie。部署与调用示例见[源码部署指南](docs/SOURCE_DEPLOY.md)。正式启动器设置实际 `listen_host/listen_port/requested_port`；bootstrap的 `listener` 以及auth状态/访问设置返回 `actual_host/actual_port/requested_port/port_changed/port_warning`，不从代理公开端口推断后端监听。发生顺延写WARNING并显示全局提示，配置端口保持原值；`--strict-port` 禁止顺延，Docker默认命令启用。直接嵌入ASGI应用的宿主需提供这些实际监听状态，或自行负责端口管理。
 
 - `GET /api/auth/status`：公开登录状态、设密状态；实际数据和密码文件路径只在经过初始化证明或已认证的本机请求返回。
 - `POST /api/auth/setup {mode,password}`：`password` 或 `local_only`，首次或删文件后只能由本机初始化证明创建；`local_only` 同步关闭远程入口。
@@ -38,6 +42,7 @@ Python 3.11–3.13（推荐3.12），FastAPI、SQLite；正式入口为 `python 
 - `POST /api/persona/distill/character/search`：搜索并保存待确认角色来源；`POST .../corpus` 上传解析材料；`POST .../start` 必须带已确认标记，创建后台蒸馏。
 - `POST /api/persona/distill/{job_id}/trial`：无操作工具的草稿试聊；`POST .../apply` 另存人格；`GET .../artifact` 只允许角色模式下载 Skill。
 - `POST /api/chat/attachments`：multipart `file`、`scope_id`、`purpose`，用途为 `context`、`memory` 或 `distillation`；不默认为长期记忆。普通参考附件最多 8MB。
+- `POST /api/chat` 默认返回完整JSON；本地网页会话可传 `stream:true` 接收SSE。`data` 内事件类型为 `start`、`delta`、`reset`、`result`、`error`，注释心跳不含正文。`delta` 仅供临时预览，`result.data` 才是已校验的最终结果；`reset` 清除草稿。断连取消请求并保留未知消费，客户端不能因缺少最终事件自动重发工具操作。代理应禁用缓冲；QQ会话在管理界面仍为只读。
 - `POST /api/models`：使用当前表单配置读取模型列表；普通 `GET` 读取已保存配置。模型测试与列表读取按实际服务验证，不凭模型名推断工具或图片能力。
 - `GET/POST /api/model-providers`、`PUT/DELETE .../{id}`：供应商连接目录；`POST .../discover` 或 `.../{id}/discover` 使用当前表单读模型目录，不保存未提交密钥。`legacy` 来源只读，原模型 ID 和密钥保留。
 - `POST /api/model-catalog/models {provider_id,models}`：多选批量添加；`PATCH/DELETE .../models/{id}` 修改或删除模型；`PUT .../routing` 按用途选择模型。会话 `model_id:''` 继承全局聊天模型；在用模型删除需先解除路由和会话引用。
@@ -49,6 +54,16 @@ Python 3.11–3.13（推荐3.12），FastAPI、SQLite；正式入口为 `python 
 - `/api/statistics?days=1|3|7`：有界SQL聚合与真实进程采样；未采集指标为null，不伪造首字延迟或价格。
 - `/api/updates/apply {release_id}`：真正本机连接、Windows安装版、启动器可退出且无活动任务/模型请求时启动一键流程；仅固定仓库已发布文件，校验后静默交接。源码和便携版手动部署。
 - `time.timezone`：IANA时区，默认Asia/Shanghai；日预算、Planner、表情配额与统计用同一自然日。
+
+
+## 扩展本地接口（0.1.4）
+
+- `GET /api/chat/attachments?scope_id=...&offset=0&limit=50`：按会话分页列出资料；`GET/DELETE /api/chat/attachments/{id}`预览或主动撤销。`POST .../release`释放临时引用，`POST .../cleanup`触发安全回收；正在使用的引用在请求/任务结束前不会被自动删除。主动删除属于撤权，后续模型派发、最终结果仍需复核。
+- `GET /api/usage/unconfirmed`：分页查看待核实消费；`POST /api/usage/{id}/reconcile`由真正本机的已认证管理员填写实际用量/费用或未计费结论及依据。幂等更新有效账本，保留原估算和审计，尝试次数不清除；不提供供应商自动逐笔核销。
+- `POST /api/chat {stream:true,...}`的增量事件仍遵循上方SSE约定；请求取消必须释放附件租约与模型名额，已派发但无法确认的费用保留为待核实。只在最终`result`保存完整回复，禁止把工具参数或隐藏思考作为预览正文。
+- `/api/statistics`额外返回可读取的cgroup v1/v2资源边界、采样CPU使用率与后台向量索引状态；无法可靠关联的外部QQ连接器资源明确标记未采集。
+- 记忆词项/向量索引是可重建派生数据。候选必须经过当前作用域、来源版本和依赖权限校验；后台队列有界、去重、低优先级，关闭时取消并等待，不跨重启重放。查询向量与可选同步构建共用`memory.semantic_timeout_seconds`，不代表整轮聊天总时限。
+- `output.reply_max_chars`整轮字符上限为0—20000整数，`output.message_max_chars`单条为0—4000整数，均默认0不限制；`output.remove_parentheses`默认false。它们独立于分段开关，只处理AI正文，受保护代码/链接/JSON不截残，系统说明和工具确认凭据保留。调整后消息保存`metadata.original_reply`与`metadata.output_adjustment`并提供折叠原文；详情见[输出约定](docs/MODEL_OUTPUT.md)。
 
 ## 任务执行边界
 

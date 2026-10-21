@@ -49,7 +49,7 @@ def test_model_mode_ignores_old_character_targets_and_does_not_invent_breaks():
 def test_disabled_mode_and_excess_parts_keep_full_content():
     reply='一\n\n二\n\n三\n\n四'
     assert model_reply_parts(reply,{'output':{'enabled':False}})==[reply]
-    assert model_reply_parts(reply,{'output':{'max_parts':2}})==['一','二\n\n三\n\n四']
+    assert model_reply_parts(reply,{'output':{'max_parts':2}})==['一\n\n二','三\n\n四']
     assert generation_instructions({'output':{'enabled':False}}).find('一条完整消息')>=0
     assert generation_instructions({'output':{'mode':'length'}})==''
 

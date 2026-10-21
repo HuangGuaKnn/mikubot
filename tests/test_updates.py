@@ -68,14 +68,16 @@ def test_semantic_order_and_untrusted_assets():
 
 @pytest.mark.anyio
 async def test_only_explicit_checks_contact_github_and_filter_previews(tmp_path):
-    item,calls=manager(tmp_path,[release(),release('v0.1.4-rc.1',identifier=13),release('v0.1.0',identifier=10)])
+    major, minor, patch = map(int, __version__.split('.'))
+    preview = f'v{major}.{minor}.{patch + 1}-rc.1'
+    item,calls=manager(tmp_path,[release(),release(preview,identifier=13),release('v0.1.0',identifier=10)])
     assert calls==[]
     result=await item.check()
     assert [x['tag'] for x in result['releases']]==['v'+__version__,'v0.1.0']
     assert result['releases'][-1]['relation']=='older'
     await item.check();assert len(calls)==1
     result=await item.check(include_prerelease=True)
-    assert result['releases'][0]['tag']=='v0.1.4-rc.1' and len(calls)==2
+    assert result['releases'][0]['tag']==preview and len(calls)==2
     for value in [0,True,'1',101]:
         with pytest.raises(ValueError):await item.check(page=value)
 

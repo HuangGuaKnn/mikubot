@@ -1,6 +1,6 @@
 # 本地改进：部署、隔离与验收
 
-本文描述0.1.3。正式桌面目标为Windows；Linux核心的Python3.11–3.13回归、Docker镜像构建和隔离探针此前0.1.1已在[GitHub Actions](https://github.com/iownmmiku/mikubot/actions/runs/39226282587)通过。本机Windows家庭版仍未运行Docker，真实QQ、长期服务器部署与公网证书需按目标环境验收。
+本文描述0.1.4。正式桌面目标为Windows；Linux核心的Python3.11–3.13回归、Docker镜像构建和隔离探针此前0.1.1已在[GitHub Actions](https://github.com/iownmmiku/mikubot/actions/runs/39226282587)通过。本机Windows家庭版仍未运行Docker，真实QQ、长期服务器部署与公网证书需按目标环境验收。
 
 ## Python 与包入口
 
@@ -24,6 +24,8 @@ bash start.sh --data-dir "$HOME/mikubot-data"
 ```
 
 `--init-password` 在终端交互设密且不启动服务，无默认密码，也不把密码放命令参数里。默认只监听回环。远程使用先配置HTTPS，再以 `--host 0.0.0.0 --port 8765` 启动并限制后端只能由代理访问。停止用 `bash start.sh --data-dir "$HOME/mikubot-data" --stop`。脚本可指定 `--python /path/to/python3.13`。
+
+可编辑安装的构建工具准备、systemd标准入口、端口固定和本地API凭据示例见[源码部署指南](SOURCE_DEPLOY.md)。已有systemd应把 `-m qunyu` 改为 `-m mikubot`，保留原数据目录与参数。当前源码新增 `--strict-port`，推荐固定反向WS、代理和容器部署使用；端口不可用直接退出。桌面仍可自动顺延，发生时日志写WARNING、WebUI顶部持续提示，`server.json` 同时记录请求与实际端口。POSIX的 `SO_REUSEADDR` 不能抢占活跃监听；外部地址不会自动改写。以上端口改进从0.1.4提供。
 
 Windows在加盐scrypt密码校验值外加DPAPI，其他系统使用scrypt校验值与私有文件权限。非Windows的模型连接密钥目前为Base64编码，**不是加密**，须保护宿主账户和数据目录。跨系统不能解密Windows DPAPI记录，需重设密码、重新填写密钥。
 

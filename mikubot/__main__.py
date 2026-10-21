@@ -33,12 +33,13 @@ def _local_host(host: str) -> bool:
         return False
 
 
-def _bind_listeners(host: str, port_requested: int):
+def _bind_listeners(host: str, port_requested: int, *, strict_port: bool = False):
     """A selected LAN interface still gets a separate private desktop listener."""
     address = ipaddress.ip_address(host)
     if address.version == 6 and host != '::':
         raise ValueError('IPv6 监听请使用 --host ::（双栈）；本机桌面通过 127.0.0.1 连接。')
-    for port in range(port_requested, min(port_requested + 30, 65536)):
+    last_error = None
+    for port in range(port_requested, min(port_requested + (1 if strict_port else 30), 65536)):
         listeners = []
         try:
             targets = [(socket.AF_INET6 if address.version == 6 else socket.AF_INET, host)]
@@ -49,16 +50,26 @@ def _bind_listeners(host: str, port_requested: int):
                 listeners.append(listener)
                 if os.name == 'nt':
                     listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                else:
+                    # Reuse a recently closed listener on POSIX; never enable
+                    # SO_REUSEPORT or share a live listener with another process.
+                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 if family == socket.AF_INET6:
                     listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
                 listener.bind((bind_host, port))
                 listener.listen(128)
                 listener.setblocking(False)
+            if port != port_requested:
+                logging.warning('请求监听 %s:%s 失败（%s），已改用端口 %s。固定端口的 OneBot 反向 WebSocket、反向代理和容器映射不会自动修改；请释放原端口后重启，或同步修改外部地址。服务器可用 --strict-port 禁止端口顺延。',
+                                host, port_requested, last_error, port)
             return listeners, port
-        except OSError:
+        except OSError as exc:
+            last_error = exc
             for listener in listeners:
                 listener.close()
-    raise OSError('没有可用端口，请检查监听地址或关闭占用端口的程序后重试。')
+    if strict_port:
+        raise OSError(f'无法监听 {host}:{port_requested}；--strict-port 已禁止端口顺延。请检查监听地址或关闭占用端口的程序后重试。') from last_error
+    raise OSError(f'无法监听 {host}:{port_requested} 或其后续端口，请检查监听地址或关闭占用端口的程序后重试。') from last_error
 
 
 def _desktop_error(exc, data, port):
@@ -114,6 +125,7 @@ def main():
     parser.add_argument('--data-dir', help='明确指定数据目录；默认使用系统用户数据目录')
     parser.add_argument('--host', help='监听地址；非本机地址要求已设置密码，且不会自动打开防火墙')
     parser.add_argument('--port', type=int, default=None)
+    parser.add_argument('--strict-port', action='store_true', help='端口不可用时直接退出，禁止顺延；推荐固定反向 WS、反向代理和容器部署使用')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--browser', action='store_true', help='使用系统浏览器，Windows 默认使用独立桌面窗口')
     mode.add_argument('--no-browser', action='store_true', help='仅运行后台服务，不初始化桌面或浏览器')
@@ -229,7 +241,7 @@ def _run_instance(data, args, parser):
         from .web_auth import WebAuth
         if WebAuth(data, settings.token).status()['mode'] != 'password':
             raise ValueError('远程 WebUI 需要密码。请先用本机桌面设置密码，再开启远程访问。')
-    listeners, port = _bind_listeners(host, port_requested)
+    listeners, port = _bind_listeners(host, port_requested, strict_port=args.strict_port)
     from .api import create_app
     try:
         app = create_app(data, allow_remote=allow_remote)
@@ -239,6 +251,8 @@ def _run_instance(data, args, parser):
         raise
     settings = app.state.settings
     app.state.listen_host = host
+    app.state.listen_port = port
+    app.state.requested_port = port_requested
     identity = hashlib.sha256(settings.token.encode()).hexdigest()[:16]
 
     class RedactSecrets(logging.Filter):
@@ -338,7 +352,7 @@ def _run_instance(data, args, parser):
             icon = None
     if shell:
         activation = ActivationServer(shell.show)
-    instance_file.write_text(json.dumps({'port': port, 'pid': os.getpid(), 'host': host,
+    instance_file.write_text(json.dumps({'port': port, 'requested_port': port_requested, 'pid': os.getpid(), 'host': host,
         'mode': 'desktop' if shell else ('headless' if args.no_browser else 'browser'),
         'activation': activation.record if activation else None}), encoding='utf-8')
     try:

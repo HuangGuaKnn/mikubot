@@ -104,10 +104,21 @@ class AuthHTTP:
         public = self.settings.get()['webui']['public_url']
         return bool(public and origin == public and request.headers.get('host','').lower() == urlsplit(public).netloc.lower())
 
+    def binding(self, request):
+        # Listener state belongs to this running process. Host headers behind
+        # HTTPS proxies describe a public endpoint, not our bound socket.
+        actual_host = getattr(self.app.state, 'listen_host', '0.0.0.0' if self.allow_remote else '127.0.0.1')
+        port = getattr(self.app.state, 'listen_port', None) or request.url.port or (443 if request.url.scheme == 'https' else 80)
+        requested_port = getattr(self.app.state, 'requested_port', port)
+        changed = port != requested_port
+        warning = (f'启动端口发生变化：请求 {requested_port}，实际监听 {port}。固定端口的 OneBot 反向 WebSocket、反向代理和容器映射不会自动修改。'
+                   '请释放原端口后重启，或同步修改外部地址；服务器可用 --strict-port 禁止顺延。') if changed else ''
+        return dict(actual_host=actual_host, actual_port=port, requested_port=requested_port, port_changed=changed, port_warning=warning)
+
     def access(self, request):
         cfg = self.settings.get()['webui']
-        actual_host = getattr(self.app.state, 'listen_host', '0.0.0.0' if self.allow_remote else '127.0.0.1')
-        port = request.url.port or (443 if request.url.scheme == 'https' else 80)
+        binding = self.binding(request)
+        actual_host, port = binding['actual_host'], binding['actual_port']
         changed = self.access_saved or any(cfg[key] != self.initial_access[key] for key in ('remote_enabled','host','port'))
         restart = changed and (cfg['remote_enabled'] != self.bound_remote or (cfg['remote_enabled'] and cfg['host'] != actual_host) or cfg['port'] != port)
         urls = [f'http://127.0.0.1:{port}/']
@@ -128,7 +139,7 @@ class AuthHTTP:
                         urls.append(f'http://[{host}]:{port}/' if address.version == 6 else f'http://{host}:{port}/')
                 except ValueError:
                     pass
-        return dict(cfg, actual_remote_enabled=self.remote_ready(), actual_host=actual_host, actual_port=port,
+        return dict(cfg, **binding, actual_remote_enabled=self.remote_ready(),
                     restart_required=restart, urls=urls)
 
     def status(self, request):
@@ -142,6 +153,7 @@ class AuthHTTP:
             value.update(data_dir=str(self.data_dir), password_file=str(self.auth.path))
         access = self.access(request)
         value.update(listen_host=access['actual_host'], restart_required=access['restart_required'], urls=access['urls'])
+        value.update(self.binding(request))
         return value
 
 

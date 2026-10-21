@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ from fastapi import Body, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from .access import manager_for, normalize_administrators
+from .attachments import AttachmentLibrary, bounded_parse
 from .computer import ComputerService
 from .distillation import DistillationService
 from .documents import MAX_BYTES, extract_document
@@ -58,7 +60,15 @@ def install_experience(app, store, settings, provider, chat, router, data_dir, r
     app.state.resume_tool_result=resume_tool
     chat.computer, chat.runs = computer, runs
     app.state.access, app.state.runs, app.state.computer, app.state.distillation = access, runs, computer, distillation
-    attachment_dir = Path(data_dir) / 'chat_attachments'
+    library = AttachmentLibrary(data_dir, store, runs)
+    app.state.attachments = library
+
+    @app.middleware('http')
+    async def protect_attachment_requests(request, call_next):
+        if request.method == 'POST' and request.url.path in ('/api/chat', '/api/computer/jobs'):
+            with library.request():
+                return await call_next(request)
+        return await call_next(request)
 
     def local_scope(scope_id):
         scope = store.get_scope(str(scope_id))
@@ -66,31 +76,9 @@ def install_experience(app, store, settings, provider, chat, router, data_dir, r
             raise ValueError('请在本地聊天中使用此入口')
         return scope
 
-    def attachments(scope_id, ids):
-        if not isinstance(ids, list) or len(ids) > 5:
-            raise ValueError('一次最多引用5个附件')
-        records = []
-        for item in ids:
-            value = item.get('id') if isinstance(item, dict) else item
-            if not isinstance(value, str) or not re.fullmatch('[a-f0-9]{32}', value):
-                raise ValueError('附件标识无效')
-            path = attachment_dir / (value + '.json')
-            if not path.exists():
-                raise ValueError('附件已不存在，请重新上传')
-            record = json.loads(path.read_text('utf-8'))
-            if record['scope_id'] != scope_id or record['user_id'] != 'owner':
-                raise PermissionError('附件不属于当前聊天')
-            records.append(record)
-        if sum(len(x['text']) for x in records) > 80000:
-            raise ValueError('本次参考内容过长，请分次选择附件')
-        return records
+    attachments = library.resolve
     app.state.resolve_attachments = attachments
-    def attachment_current(scope_id,records):
-        try:
-            current=attachments(scope_id,[x['id'] for x in records])
-            return all(x['sha256']==y['sha256'] and x['text']==y['text'] for x,y in zip(records,current))
-        except (ValueError,KeyError,PermissionError,OSError): return False
-    chat.attachments_current=attachment_current
+    chat.attachments_current = library.current
 
     async def completed(job):
         # The control plane records actual completion independently of delivery.
@@ -116,6 +104,7 @@ def install_experience(app, store, settings, provider, chat, router, data_dir, r
         else:
             runs._jobs[job['id']]['delivery_status'] = 'not_sent'
         runs._save()
+        library.collect()
     runs.on_complete = completed
 
     async def notify(job,event):
@@ -363,8 +352,9 @@ def install_experience(app, store, settings, provider, chat, router, data_dir, r
 
     @app.post('/api/persona/distill/corpus')
     async def upload_corpus(file: UploadFile = File(...)):
-        raw = await file.read(24 * 1024 * 1024 + 1)
-        return await asyncio.to_thread(distillation.inspect_corpus, raw, Path(file.filename or 'corpus.zip').name)
+        async with getattr(app.state, 'parsing_slot', nullcontext)():
+            raw = await file.read(24 * 1024 * 1024 + 1)
+            return await bounded_parse(distillation.inspect_corpus, raw, Path(file.filename or 'corpus.zip').name)
 
     @app.post('/api/persona/distill/start')
     async def start_distillation(payload: dict = Body(...)):
@@ -418,27 +408,39 @@ def install_experience(app, store, settings, provider, chat, router, data_dir, r
             return await upload_corpus(file)
         if purpose not in ('context', 'memory'):
             raise ValueError('附件用途须为本次参考、长期资料或人格蒸馏')
-        raw = await file.read(MAX_BYTES + 1)
-        name = Path(file.filename or 'attachment.txt').name
-        parsed = await asyncio.to_thread(extract_document, name, raw)
-        attachment_dir.mkdir(parents=True, exist_ok=True)
-        if len(list(attachment_dir.glob('*.json'))) >= 200:
-            raise ValueError('参考附件已达到200个，请先管理旧附件')
-        record = {'id': secrets.token_hex(16), 'name': name, 'text': parsed['text'], 'scope_id': scope_id,
-                  'user_id': 'owner', 'sha256': hashlib.sha256(raw).hexdigest(), 'created_at': now()}
-        (attachment_dir / (record['id'] + '.json')).write_text(json.dumps(record, ensure_ascii=False), 'utf-8')
-        response = {k: v for k, v in record.items() if k != 'text'}
-        response.update(preview=record['text'][:2000], characters=len(record['text']), purpose=purpose)
-        if purpose == 'memory':
-            memory = store.create_memory({'scope_id': scope_id, 'user_id': 'owner', 'kind': 'note', 'content': parsed['text'],
-                'subject': name, 'visibility': 'private', 'filename': name, 'file_hash': record['sha256'], 'pinned': True})
-            response['memory'] = memory
-        return response
+        async with getattr(app.state, 'parsing_slot', nullcontext)():
+            raw = await file.read(MAX_BYTES + 1)
+            name = Path(file.filename or 'attachment.txt').name
+            parsed = await bounded_parse(extract_document, name, raw)
+            return library.create(scope_id, name, raw, parsed, purpose)
+
+    @app.get('/api/chat/attachments')
+    async def list_attachments(scope_id: str = 'web:default', offset: int = 0, limit: int = 50):
+        local_scope(scope_id)
+        return await asyncio.to_thread(library.list, scope_id, offset=offset, limit=limit)
+
+    @app.post('/api/chat/attachments/release')
+    async def release_attachments(payload: dict = Body(...)):
+        scope_id = str(payload.get('scope_id', 'web:default'))
+        local_scope(scope_id)
+        return library.release(scope_id, payload.get('ids', []))
+
+    @app.post('/api/chat/attachments/cleanup')
+    async def cleanup_attachments(payload: dict = Body(default={})):
+        scope_id = str(payload.get('scope_id', 'web:default'))
+        local_scope(scope_id)
+        if not isinstance(payload.get('preview', True), bool):
+            raise ValueError('preview须为布尔值')
+        return await asyncio.to_thread(library.cleanup, scope_id, preview=payload.get('preview', True))
+
+    @app.get('/api/chat/attachments/{attachment_id}')
+    async def preview_attachment(attachment_id: str, scope_id: str = 'web:default'):
+        local_scope(scope_id)
+        return library.preview(scope_id, attachment_id)
 
     @app.delete('/api/chat/attachments/{attachment_id}')
     async def delete_attachment(attachment_id: str, scope_id: str = 'web:default'):
-        attachments(scope_id, [attachment_id])
-        (attachment_dir / (attachment_id + '.json')).unlink()
-        return {'ok': True}
+        local_scope(scope_id)
+        return library.delete(scope_id, attachment_id)
 
     return runs

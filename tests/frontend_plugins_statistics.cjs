@@ -24,7 +24,7 @@ async function main(){
   await actions.handleSubmit('chat',{values:{}});assert.equal(fallback.at(-1)[0],'chat');
   await actions.handleAction('plugin-enable',{dataset:{id:plugin.id,enabled:'true'}});assert.equal(calls.at(-1)[1].body.enabled,true);
   await actions.handleSubmit('plugin-run',{dataset:{id:plugin.id},values:{input:'{"test":1}'}});assert.equal(calls.at(-1)[1].body.input.test,1);assert.equal(sandbox.state.page,'jobs');
-  let stats=await sandbox.window.MikubotStatistics.render();assert.match(stats,/采样中/);assert.match(stats,/&lt;img src=x&gt;/);assert.match(stats,/首字延迟：未采集/);
+  let stats=await sandbox.window.MikubotStatistics.render();assert.match(stats,/采样中/);assert.match(stats,/&lt;img src=x&gt;/);assert.match(stats,/首个有效内容延迟：未采集/);assert.match(stats,/待核实消费/);
   await actions.handleAction('statistics-period',{dataset:{days:'7'}});assert.equal(sandbox.state.statisticsDays,7);
   sandbox.state.page='statistics';sandbox.window.MikubotStatistics.afterRender();assert.equal(timers.size,1);
   sandbox.state.page='chat';sandbox.window.MikubotStatistics.afterRender();assert.equal(timers.size,0);

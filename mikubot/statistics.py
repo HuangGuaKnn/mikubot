@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from .timezones import config_zone, day_bounds
+from .resource_metrics import ResourceMetrics
 
 
 class ProcessMetrics:
@@ -57,9 +58,12 @@ def snapshot(store,settings,days=1,*,now=None):
         model_rows=connection.execute("SELECT COALESCE(json_extract(data,'$.provider_id'),'default'),COALESCE(json_extract(data,'$.model'),'未知模型'),COUNT(*),SUM(input_tokens+output_tokens) FROM usage WHERE created_at>=? AND created_at<? GROUP BY 1,2 ORDER BY 4 DESC LIMIT 100",params).fetchall()
         usage_hours=connection.execute("SELECT CAST(strftime('%s',created_at) AS INTEGER)/3600,SUM(input_tokens+output_tokens) FROM usage WHERE created_at>=? AND created_at<? GROUP BY 1",params).fetchall()
         today=connection.execute('SELECT COALESCE(SUM(input_tokens+output_tokens),0) FROM usage WHERE created_at>=? AND created_at<?',(day_start,day_end)).fetchone()[0]
+        ttft=connection.execute("SELECT AVG(json_extract(data,'$.ttft_ms')) FROM usage WHERE created_at>=? AND created_at<? AND COALESCE(json_extract(data,'$.unconfirmed'),0)=0 AND json_type(data,'$.ttft_ms') IN ('integer','real')",params).fetchone()[0]
     counts={int(row[0]):int(row[1]) for row in messages if row[0] is not None}
     tokens={int(row[0]):int(row[1]) for row in usage_hours if row[0] is not None}
     zone=config_zone(settings)
+    from .usage_ledger import breakdown
+    accounting = breakdown(store, params[0], params[1])
     first=int(start.timestamp())//3600;last=int(now.timestamp())//3600
     trend=[{'at':datetime.fromtimestamp(hour*3600,timezone.utc).isoformat(),
             'label':datetime.fromtimestamp(hour*3600,zone).strftime('%m-%d %H:%M'),
@@ -70,15 +74,24 @@ def snapshot(store,settings,days=1,*,now=None):
             'models':[{'provider_id':row[0],'model':row[1],'calls':int(row[2]),'tokens':int(row[3] or 0)} for row in model_rows],
             'usage':{'calls':int(usage[0]),'input_tokens':int(usage[1]),'output_tokens':int(usage[2]),'tokens':int(usage[1]+usage[2]),
                      'estimated_cost':float(usage[3]),'unknown_price_calls':int(usage[4]),'estimated_calls':int(usage[5]),
-                     'average_response_ms':None if usage[6] is None else float(usage[6]),'ttft_ms':None},'trend':trend}
+                     'accounting':accounting,
+                     'average_response_ms':None if usage[6] is None else float(usage[6]),'ttft_ms':None if ttft is None else float(ttft)},'trend':trend}
 
 
 def install_statistics(app,store,settings,onebot,official):
     metrics=ProcessMetrics()
+    resources=ResourceMetrics()
     @app.get('/api/statistics')
     async def statistics(days:int=1):
         result=await asyncio.to_thread(snapshot,store,settings,days)
         result['process']=metrics.read()
+        result['resources']=await asyncio.to_thread(resources.read)
+        result['connector_resources']={'available':False,'reason':'external_process_identity_unknown',
+            'message':'NapCat / SnowLuma 由外部运行，尚无可信进程标识，其独立资源占用未单独采集。'}
+        memory=getattr(getattr(app.state,'chat',None),'memory',None)
+        if callable(status:=getattr(memory,'indexing_status',None)):
+            result['memory_indexing']=status()
+        result['admission']=app.state.resource_limits()
         result['connections']=[{'platform':'web','connected':True},
             {'platform':'onebot','connected':bool(onebot.status().get('connected'))},
             {'platform':'qqofficial','connected':bool(official.status().get('connected'))}]

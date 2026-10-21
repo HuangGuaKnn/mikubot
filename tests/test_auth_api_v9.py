@@ -30,6 +30,54 @@ def test_explicit_cli_port_is_not_misreported_as_a_saved_network_change(tmp_path
         assert response.json()['restart_required'] is True
 
 
+def test_port_fallback_exposed_in_bootstrap_and_status_without_rewriting_config(tmp_path):
+    app = create_app(tmp_path / 'port-fallback', start_workers=False)
+    app.state.listen_host, app.state.listen_port, app.state.requested_port = '127.0.0.1', 8766, 8765
+    with TestClient(app, base_url='http://127.0.0.1:8766', client=('127.0.0.1',41003)) as client:
+        status = client.get('/api/auth/status').json()
+        assert status['requested_port'] == 8765 and status['actual_port'] == 8766
+        assert status['port_changed'] is True and 'OneBot' in status['port_warning']
+        password_login(client, app)
+        binding = client.get('/api/bootstrap').json()['listener']
+        assert binding['port_changed'] and binding['actual_port'] == 8766
+        access = client.get('/api/auth/access').json()
+        assert access['actual_port'] == 8766 and access['port'] == 8765
+        assert access['restart_required'] is False
+        assert app.state.settings.get()['webui']['port'] == 8765
+
+
+def test_listener_port_uses_bound_socket_behind_https_proxy(clients):
+    local, _, app = clients
+    # This fixture toggles remote_enabled after app creation. Model the
+    # startup snapshot before checking proxy-induced port confusion.
+    app.state.auth_http.initial_access = dict(app.state.settings.get()['webui'])
+    app.state.listen_host, app.state.listen_port, app.state.requested_port = '0.0.0.0', 8766, 8765
+    password_login(local, app)
+    app.state.settings.update({'webui': {'allowed_hosts':['bot.example.com'], 'public_url':'https://bot.example.com'}})
+    with TestClient(app, base_url='http://bot.example.com', client=('127.0.0.1',41004)) as proxy:
+        proxy.headers['x-forwarded-proto'] = 'https'
+        remote_login(proxy)
+        # The test transport URL is HTTP after TLS termination; explicitly
+        # replay the Secure cookie a browser sends to the public HTTPS proxy.
+        proxy.headers['Cookie'] = f'{COOKIE_NAME}={proxy.cookies.get(COOKIE_NAME)}'
+        status = proxy.get('/api/auth/status').json()
+        assert status['actual_port'] == 8766 and status['requested_port'] == 8765
+        access = proxy.get('/api/auth/access').json()
+        assert access['actual_port'] == 8766 and access['restart_required'] is False
+        assert 'http://127.0.0.1:8766/' in access['urls']
+        assert 'https://bot.example.com/' in access['urls']
+
+
+def test_x_token_is_rejected_and_local_bearer_remains_local_only(clients):
+    local, remote, app = clients
+    password_login(local, app)
+    local.cookies.clear()
+    token = app.state.settings.token
+    assert local.get('/api/bootstrap', headers={'X-Token':token}).status_code == 401
+    assert local.get('/api/bootstrap', headers={'Authorization':'Bearer ' + token}).status_code == 200
+    assert remote.get('/api/bootstrap', headers={'Authorization':'Bearer ' + token}).status_code == 401
+
+
 def test_https_reverse_proxy_keeps_remote_identity_and_requires_declared_origin(clients):
     local, _, app = clients
     password_login(local, app)

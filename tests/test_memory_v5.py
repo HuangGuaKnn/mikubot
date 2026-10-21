@@ -175,7 +175,9 @@ async def test_provider_lock_guard_cancels_body_when_deleted_while_queued(store)
         sent.append(list(texts))
         return [[1., 0.] for _ in texts]
 
-    engine = MemoryEngine(store, config(), embed)
+    cfg = config()
+    cfg['memory']['background_indexing'] = False  # Exercise the explicit synchronous build mode.
+    engine = MemoryEngine(store, cfg, embed)
     try:
         task = asyncio.create_task(engine.recall("qq:group:2", "alice", "音乐"))
         await entered.wait()

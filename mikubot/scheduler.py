@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from .onebot import _ids, is_quiet, scope_value
 from .access import private_allowed, chat_allowed
+from .timeparse import next_occurrence
 
 
 def _datetime(value):
@@ -69,17 +70,18 @@ class TaskScheduler:
             allowed = chat_allowed(cfg, 'qqofficial', kind, target)
         else:
             return False
-        return allowed and kind in ('group', 'private') and not is_quiet(scope, now) and self.bridge.status().get('connected', False)
+        return allowed and kind in ('group', 'private') and not is_quiet(scope, now, settings=cfg) and self.bridge.status().get('connected', False)
 
     def _finish(self, task, now):
         repeat = task.get('repeat', 'none')
         patch = {'status': 'completed', 'delivery_status': 'delivered', 'result': '提醒已送达', 'error': ''}
         if repeat in ('daily', 'weekly'):
-            days = 1 if repeat == 'daily' else 7
-            due = _datetime(task['due_at'])
-            interval = timedelta(days=days)
-            steps = max(1, int((now - due) // interval) + 1)
-            patch.update(status='pending', delivery_status='pending', due_at=(due + steps * interval).isoformat(), result='上次提醒已送达；等待下次触发')
+            following, skipped = next_occurrence(task, now, self.settings)
+            patch.update({key: following[key] for key in ('due_at', 'timezone', 'wall_time', 'calendar_anchor')})
+            patch.update(status='pending', delivery_status='pending', result='上次提醒已送达；等待下次触发')
+            if skipped:
+                patch['result'] += '；已跳过夏令时切换中不存在的本地钟点'
+                self.store.add_event('reminder_calendar_skip', '已跳过时区切换中不存在的提醒钟点', task_id=task['id'], timezone=following['timezone'], skipped=skipped)
         self.store.update_task(task['id'], patch)
         self.store.add_event('reminder_delivered', '提醒已送达', task_id=task['id'], scope_id=task['scope_id'], occurrence_due=task.get('due_at'))
 
@@ -108,7 +110,7 @@ class TaskScheduler:
                 if not local and (qq_sent or (now - self._last_qq_delivery.get(task['scope_id'], datetime.min.replace(tzinfo=timezone.utc))).total_seconds() < 60):
                     continue
                 # Commit before attempting delivery; unknown outcomes never auto-retry.
-                self.store.update_task(task['id'], {'status': 'running', 'delivery_status': 'pending', 'error': ''})
+                task = self.store.update_task(task['id'], {'status': 'running', 'delivery_status': 'pending', 'error': ''})
                 content = '⏰ 提醒：' + task['title']
                 try:
                     if local:

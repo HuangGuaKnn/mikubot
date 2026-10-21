@@ -1,6 +1,6 @@
 # mikubot 源码部署指南
 
-当前版本为0.1.2。安装包、便携包及源码包见[GitHub Releases](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.2)。完整隔离、HTTPS、Linux/Docker步骤与验收范围见[部署与安全说明](DEPLOYMENT_AND_SAFETY.md)。
+本文描述0.1.4源码部署，安装包、便携包与源码在[GitHub Releases](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.4)按实际公开资产下载。端口告警与 `--strict-port` 从本版提供；完整隔离、HTTPS、Linux/Docker步骤与验收范围见[部署与安全说明](DEPLOYMENT_AND_SAFETY.md)。
 
 ## Windows：一条命令准备并启动
 
@@ -41,7 +41,91 @@ bash scripts/setup-source.sh --setup-only
 bash start.sh --data-dir "$HOME/mikubot-data"
 ```
 
-支持Python3.11–3.13；先在终端交互设密，再启动服务。默认监听回环，远程需要HTTPS。Docker构建、首次密码、持久卷、代理与容器内QQ地址见[Linux/Docker部署步骤](DEPLOYMENT_AND_SAFETY.md#docker-服务部署)。本机没有Linux或Docker引擎，本次未完成这些环境的真实启动验收。
+支持Python3.11–3.13；系统需提供对应的 `venv` 和 `pip`（Debian/Ubuntu按所选解释器安装对应的 `python3-venv` / `python3-pip` 包）。先在终端交互设密，再启动服务。默认监听回环，远程需要HTTPS。Docker构建、首次密码、持久卷、代理与容器内QQ地址见[Linux/Docker部署步骤](DEPLOYMENT_AND_SAFETY.md#docker-服务部署)。已发布0.1.3的Windows/Linux、Python3.11–3.13和Docker检查见[GitHub Actions](https://github.com/iownmmiku/mikubot/actions/runs/39423537788)，不代替真实QQ或长期挂机验收。
+
+若使用可编辑安装，在已创建的虚拟环境中运行：
+
+```bash
+.venv/bin/python -m pip install --upgrade pip 'setuptools>=75,<83' wheel
+.venv/bin/python -m pip install -e .
+```
+
+正常的隔离构建会按 `pyproject.toml` 自动准备构建后端。旧pip、禁用构建隔离（`--no-build-isolation`）或不完整的虚拟环境可能出现 `BackendUnavailable` / `setuptools.build_meta` 无法导入；确认使用同一个 `.venv/bin/python`，先执行上面的构建工具安装再重试。离线环境需要事先准备匹配的wheel包；不要直接修改系统Python。`setup-source.sh` 安装的是依赖文件后从源码目录运行，不需要 `pip install -e .`。
+
+## 固定监听端口与 systemd
+
+桌面默认在请求端口不可用时尝试后续29个端口。当前源码在POSIX使用 `SO_REUSEADDR` 减少旧TCP连接残留对重启的影响；它不能抢占仍在监听的进程。发生顺延会在 `runtime.log` 写入WARNING，并在WebUI顶部持续显示请求端口和实际端口。`server.json` 的 `port` 是实际端口，`requested_port` 是本次请求端口；保存的配置不会被顺延覆盖。
+
+NapCat/SnowLuma反向WS、代理和Docker端口映射不会自动跟随。固定地址部署建议添加 `--strict-port`：端口不可用就明确退出，不启动到其他端口。当前源码的Docker默认命令已带此参数。
+
+```bash
+bash start.sh --data-dir "$HOME/mikubot-data" --port 8765 --strict-port
+# 查看实际占用；先确认进程身份，再决定停止哪个服务
+ss -ltnp 'sport = :8765'
+```
+
+配置systemd时，以下占位路径和 `your-user` 必须替换为实际值；使用已完成密码初始化、与日常启动相同的数据目录：
+
+```ini
+[Unit]
+Description=mikubot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/mikubot
+ExecStart=/path/to/mikubot/.venv/bin/python -m mikubot --data-dir /path/to/mikubot-data --no-browser --no-tray --host 127.0.0.1 --port 8765 --strict-port
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+示例只监听回环，适用于本机HTTPS代理；跨容器反连需按实际网络选择可达监听地址并限制访问。旧服务先用 `systemctl cat mikubot` 核对生效的unit及drop-in，把原 `ExecStart` 中的 `-m qunyu` 改为 `-m mikubot`，**保留原解释器路径、数据目录和所有其他参数**。需要固定端口时再加 `--strict-port`；它只在含本次修改的源码中可用。修改完成后执行：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart mikubot
+sudo systemctl status mikubot --no-pager
+sudo journalctl -u mikubot -n 50 --no-pager
+```
+
+应用WARNING与异常也记录在实际数据目录的 `runtime.log`。旧 `qunyu` 入口计划0.3.0移除，数据库名 `qunyu.db` 保留；迁移入口不需要重建数据库。更新源码不会自动改写宿主机systemd服务文件。
+
+## 本地 API 调用与鉴权
+
+`X-Token` 不是受支持的鉴权头。`/healthz` 仅用于无凭据探活；业务API默认需要登录会话。宿主机脚本可读取**正在运行实例所用数据目录**中的 `admin.token`，通过 `Authorization: Bearer <令牌>` 调用；这只对真实回环连接且Host为localhost/回环IP生效。令牌应作为凭据保护，不放URL、不上传日志，也不要转发到公网。
+
+以下脚本不打印令牌，从 `server.json` 读取实际端口，仅向127.0.0.1发送请求，禁止使用环境代理和跟随HTTP重定向；先把数据路径改为实际值：
+
+```python
+import json
+from pathlib import Path
+import urllib.request
+
+data = Path('/path/to/mikubot-data')
+port = json.loads((data / 'server.json').read_text('utf-8'))['port']
+if type(port) is not int or not 1 <= port <= 65535:
+    raise ValueError('server.json 中的端口无效')
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+client = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+request = urllib.request.Request(
+    f'http://127.0.0.1:{port}/api/bootstrap',
+    headers={'Authorization': 'Bearer ' + (data / 'admin.token').read_text('utf-8').strip()},
+)
+with client.open(request, timeout=10) as response:
+    result = json.load(response)
+print(result['name'], result['version'])
+```
+
+在另一台电脑或Docker容器里请求宿主机不属于宿主回环，Bearer不会授予管理权限。远程脚本应通过已配置HTTPS域名 `POST /api/auth/login`，正文 `{"password":"管理密码"}`，使用Cookie jar保留返回的 `mikubot_session` Cookie，再用同一会话调用业务API；密码从交互输入或安全凭据源读取，不写进脚本或命令历史。写请求的 `Origin` 如有提供必须匹配实际访问域名。不要为远程脚本开放本机初始化接口。OneBot反向WS另用连接器的access token，不使用WebUI的 `admin.token`。
 
 ## 使用 HTTPS 反向代理
 
@@ -73,6 +157,6 @@ bash start.sh --data-dir "$HOME/mikubot-data"
 .\.venv\Scripts\python.exe -m mikubot --replay .\evals\routing-synthetic.json --replay-output .\replay-report.json
 ```
 
-真实模式显式开启后可能计费，见[回放说明](archive/REPLAY-v0.6.md)。源码发行白名单已同步部署文件、核心与兼容包；本次没有重建安装包、提交、推送或发布。以后获准构建时使用`scripts/package_source.py`和`scripts/build.ps1`。
+真实模式显式开启后可能计费，见[回放说明](archive/REPLAY-v0.6.md)。源码发行白名单包括部署文件、核心与兼容包；维护者构建使用`scripts/package_source.py`和`scripts/build.ps1`。
 
 源码可在设置中选择GitHub发行版并下载源码包，但不会自动切换分支或覆盖工作区。更换代码请在新目录准备依赖，保持同一个`--data-dir`；详见[更新指南](UPDATES.md)。

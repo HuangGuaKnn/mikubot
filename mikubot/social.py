@@ -963,16 +963,16 @@ class ConversationFlow:
                                  scope_id=scope_id, message_id=record['id'])
             return delivered
 
-    async def _emit_chunks(self, scope_id, user_id, text, metadata, batch):
+    async def _emit_chunks(self, scope_id, user_id, text, metadata, batch, reply_parts=None):
         # A group's multipart replies remain readable and queued proactive plans
         # must recheck cooldown after the previous reply has actually arrived.
         async with self._output_locks[scope_id]:
-            return await self._emit_chunks_locked(scope_id, user_id, text, metadata, batch)
+            return await self._emit_chunks_locked(scope_id, user_id, text, metadata, batch, reply_parts)
 
-    async def _emit_chunks_locked(self, scope_id, user_id, text, metadata, batch):
+    async def _emit_chunks_locked(self, scope_id, user_id, text, metadata, batch, reply_parts=None):
         scope = self.store.get_scope(scope_id)
         options = output_config(self.settings.get(), scope)
-        parts = split_output(text, self.settings.get(), scope)
+        parts = split_output(text, self.settings.get(), scope, reply_parts=reply_parts)
         confirmed = 0
         for index, part in enumerate(parts, 1):
             if index > 1 and options['interval_ms']:
@@ -1030,7 +1030,7 @@ class ConversationFlow:
                 except KeyError:
                     pass  # Minimal connector test doubles may not store an assistant record.
                 if result.get('reply') and self._may_answer(scope_id, user_id, batch):
-                    delivered = await self._emit_chunks(scope_id, user_id, result['reply'], metadata, batch)
+                    delivered = await self._emit_chunks(scope_id, user_id, result['reply'], metadata, batch, result.get('reply_parts'))
                     if delivered:
                         (getattr(self.chat, 'social', None) or self._fallback).note_reply(scope_id, user_id, ids)
                         library=getattr(self.chat,'stickers',None)
@@ -1049,7 +1049,7 @@ class ConversationFlow:
                                 self.store.add_exception('sticker_send_error','表情包未发送，文字回复不受影响',exc,scope_id=scope_id)
                     else:
                         self.store.add_event('qq_delivery', '群聊回复未确认送达', scope_id=scope_id, message_id=result.get('message_id'))
-                elif not result.get('reply') and self._may_answer(scope_id, user_id, batch):
+                elif not result.get('reply') and not result.get('output_filtered') and self._may_answer(scope_id, user_id, batch):
                     if self.diagnose:
                         self.diagnose('reply_empty', scope_id=scope_id, user_id=user_id, stage='failed')
                     if batch.get('explicit'):

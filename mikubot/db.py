@@ -183,6 +183,10 @@ class Store:
         self.db_path = self.path
         self._lock = threading.RLock()
         self._closed = False
+        self._memory_search = None
+        self._memory_search_dirty = set()
+        self._memory_revision = 0
+        self._memory_search_warning = ''
         self._conn = sqlite3.connect(self.path, check_same_thread=False, timeout=30)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -295,6 +299,12 @@ class Store:
         self._conn.execute(
             f"INSERT INTO {table}({','.join(names)}) VALUES ({placeholders}) ON CONFLICT(id) DO UPDATE SET {updates}", values
         )
+        if table == 'memories':
+            self._memory_revision += 1
+            if self._memory_search_dirty is not None:
+                self._memory_search_dirty.add(record['id'])
+                if len(self._memory_search_dirty) > 4096:
+                    self._memory_search_dirty = None
         return json.loads(values[-1])
 
     def configure_timezone(self, settings):
@@ -441,12 +451,13 @@ class Store:
                 local_output = {**(local_output or {}), **{k.removeprefix('output_'):v for k,v in container.items() if k.startswith('output_')}}
                 for key,value in local_output.items():
                     if value is None: continue
-                    if key == 'enabled':
-                        _boolean(value, 'output.enabled')
+                    if key in {'enabled', 'remove_parentheses'}:
+                        _boolean(value, 'output.' + key)
                     elif key == 'mode':
                         if value not in ('model','length'): raise ValueError('output.mode 无效')
-                    elif key in {'target_chars','max_chars','interval_ms','max_parts','platform_max_chars'}:
-                        lower,upper = {'target_chars':(20,1000),'max_chars':(40,4000),'interval_ms':(0,5000),'max_parts':(1,20),'platform_max_chars':(40,20000)}[key]
+                    elif key in {'target_chars','max_chars','interval_ms','max_parts','platform_max_chars','reply_max_chars','message_max_chars'}:
+                        lower,upper = {'target_chars':(20,1000),'max_chars':(40,4000),'interval_ms':(0,5000),'max_parts':(1,20),'platform_max_chars':(40,20000),
+                                       'reply_max_chars':(0,20000),'message_max_chars':(0,4000)}[key]
                         if type(value) is not int or not lower <= value <= upper:
                             raise ValueError('output.' + key + ' 超出范围')
                     else:
@@ -619,6 +630,25 @@ class Store:
 
     def get_memory(self, id: str) -> dict:
         return _memory_view(self._get("memories", id))
+
+    def user_memory_records(self, scope_id: str, user_id: str, *, limit=1000, offset=0) -> list[dict]:
+        """Bound maintenance reads in SQL before decoding memory bodies."""
+        limit = _limit(limit, 1000)
+        if type(offset) is not int or offset < 0:
+            raise ValueError('offset须为非负整数')
+        with self._lock:
+            rows = self._conn.execute("""SELECT data FROM memories
+                WHERE scope_id=? AND user_id=? AND status='active'
+                AND COALESCE(json_extract(data,'$.property'),'') NOT IN ('memory_relation','conversation_digest')
+                ORDER BY updated_at DESC,rowid DESC LIMIT ? OFFSET ?""",
+                (scope_id, str(user_id), limit, offset)).fetchall()
+        return [_memory_view(json.loads(row[0])) for row in rows]
+
+    def user_memory_versions(self, scope_id: str, user_id: str) -> dict:
+        """Dependency snapshot without loading unrelated users or text/JSON."""
+        with self._lock:
+            return dict(self._conn.execute("SELECT id,version FROM memories WHERE scope_id=? AND user_id=? AND status='active'",
+                                           (scope_id, str(user_id))).fetchall())
 
     def blocked_memory_sources(self, scope_id: str) -> set[str]:
         """Project tombstones in SQLite without decoding entire memory bodies."""
@@ -903,6 +933,99 @@ class Store:
                     part = keys[start:start + 400]
                     roots.extend(self._list('memories', ['id IN (' + ','.join('?' for _ in part) + ')'], part))
             return self._allowed_memories(scope_id, user_id, scope_allowed=scope_allowed, roots=roots)
+
+    def _memory_candidate_boundary(self, scope_id, user_id, scope_allowed=None):
+        from .memory_search import Boundary
+        scope = self.get_scope(scope_id)
+        if not scope.get('enabled', True):
+            origins = ()
+        else:
+            space = scope.get('memory_space')
+            origins = tuple(dict.fromkeys([scope_id] + [item['id'] for item in self.list_scopes()
+                if space and item.get('memory_space') == space and item.get('enabled', True)]))
+            if scope_allowed is not None:
+                origins = tuple(origin for origin in origins if scope_allowed(origin))
+        return Boundary(scope_id, user_id, origins,
+                        scope_id.startswith(('qq:group:', 'qqofficial:group:')), utc_now())
+
+    def memory_candidate_ids(self, scope_id: str, user_id: str, query: str, limit: int = 192, *, scope_allowed=None) -> list[str]:
+        """Bound lexical candidates in a disposable index, then recheck visible_memories.
+
+        The first call rebuilds the old database in batches. Hot calls decode
+        modified records only. Metadata filtering is not dependency validation.
+        """
+        from .memory_search import MemorySearchIndex, sql_fallback
+        limit = _limit(limit, 512)
+        with self._lock:
+            boundary = self._memory_candidate_boundary(scope_id, user_id, scope_allowed)
+            if not boundary.origins:
+                return []
+            for attempt in range(2):
+                try:
+                    if self._memory_search is None:
+                        self._memory_search = MemorySearchIndex(self.data_dir / 'memory_search.db')
+                    self._memory_search.sync(self._conn, self._memory_search_dirty)
+                    # A query inside an uncommitted transaction must remain
+                    # dirty in case the caller subsequently rolls back.
+                    if not self._conn.in_transaction:
+                        self._memory_search_dirty = set()
+                    result = self._memory_search.candidates(boundary, query, limit)
+                    self._memory_search_warning = ''
+                    return result
+                except (sqlite3.DatabaseError, OSError):
+                    logging.getLogger(__name__).warning('记忆候选索引读取失败，将重建派生索引；主记忆数据库不受影响。')
+                    if self._memory_search is not None:
+                        self._memory_search.close()
+                        self._memory_search = None
+                    self._memory_search_dirty = None
+                    if attempt == 0:
+                        path = self.data_dir / 'memory_search.db'
+                        try:
+                            for suffix in ('', '-wal', '-shm', '-journal'):
+                                path.with_name(path.name + suffix).unlink(missing_ok=True)
+                        except OSError:
+                            break
+            if not self._memory_search_warning:
+                self._memory_search_warning = '记忆候选索引不可用，已降级为主库SQL检索；大量记忆检索可能变慢。'
+                logging.getLogger(__name__).warning(self._memory_search_warning)
+            return sql_fallback(self._conn, boundary, query, limit)
+
+    def filter_memory_candidate_ids(self, scope_id: str, user_id: str, record_ids, *, scope_allowed=None) -> list[str]:
+        """Fresh coarse SQL boundary for cached vectors; no body decoding.
+
+        Dependencies, source withdrawal and settings remain the responsibility
+        of visible_memories. Only this bounded projection may precede ranking.
+        """
+        keys = list(dict.fromkeys(record_ids))
+        current = self.memory_candidate_versions(scope_id, user_id, keys, scope_allowed=scope_allowed)
+        return [key for key in keys if key in current]
+
+    def memory_candidate_versions(self, scope_id: str, user_id: str, record_ids, *, scope_allowed=None) -> dict[str, int]:
+        """Current coarse-boundary versions for rejecting stale vector references.
+
+        SQL reads IDs and versions only. Dependency and source authorization
+        still need visible_memories after selecting the bounded candidates.
+        """
+        with self._lock:
+            boundary = self._memory_candidate_boundary(scope_id, user_id, scope_allowed)
+            if not boundary.origins:
+                return {}
+            where, params = boundary.sql(alias='m')
+            keys = list(dict.fromkeys(record_ids))
+            result = {}
+            for start in range(0, len(keys), 64):
+                part = keys[start:start + 64]
+                rows = self._conn.execute('SELECT m.id,m.version FROM memories m WHERE m.id IN ('
+                    + ','.join('?' for _ in part) + f') AND {where}', (*part, *params))
+                result.update((row[0], int(row[1])) for row in rows)
+            return result
+
+    def memory_search_status(self):
+        with self._lock:
+            search = self._memory_search
+            return {'mode': search.mode if search else ('sql_fallback' if self._memory_search_warning else 'uninitialized'),
+                    'warning': self._memory_search_warning or (search.warning if search else ''),
+                    'initialized': bool(search and search.initialized), 'revision': self._memory_revision}
 
     def memory_accessible(self, scope_id: str, user_id: str, record_id: str, version: int | None = None, *, scope_allowed=None) -> bool:
         """Recheck consent, membership, privacy and dependency closure now."""
@@ -1195,6 +1318,7 @@ class Store:
         return [record for _, _, record in matches[:limit]]
 
     def _prepare_task(self, record: dict) -> dict:
+        from .timeparse import validate_calendar
         for field in ("scope_id", "user_id", "title"):
             record[field] = _text(record[field], field)
         _choice(record["kind"], {"todo", "reminder"}, "kind")
@@ -1206,6 +1330,8 @@ class Store:
             raise ValueError("提醒必须设置 due_at")
         if record["repeat"] != "none" and record["due_at"] is None:
             raise ValueError("重复任务必须设置 due_at")
+        if record['due_at']:
+            validate_calendar(record, self._timezone_settings)
         key = record.get("idempotency_key")
         record["idempotency_key"] = _text(key, "idempotency_key", required=False) or None if key is not None else None
         record["error"] = _text(record.get("error", ""), "error", required=False)
@@ -1243,6 +1369,13 @@ class Store:
         with self._lock, self._conn:
             old = self.get_task(id)
             record = {**old, **patch, "id": id, "created_at": old["created_at"], "updated_at": utc_now()}
+            if record.get('due_at') and (('due_at' in patch and patch['due_at'] != old.get('due_at'))
+                                          or ('timezone' in patch and patch['timezone'] != old.get('timezone'))):
+                from .timeparse import calendar_fields
+                calendar = calendar_fields(record['due_at'], self._timezone_settings, timezone_name=record.get('timezone'))
+                for key, value in calendar.items():
+                    if key not in patch:
+                        record[key] = value
             self._prepare_task(record)
             self.get_scope(record["scope_id"])
             try:
@@ -1448,6 +1581,9 @@ class Store:
     def close(self) -> None:
         with self._lock:
             if not self._closed:
+                if self._memory_search is not None:
+                    self._memory_search.close()
+                    self._memory_search = None
                 self._conn.close()
                 self._closed = True
 
@@ -1495,6 +1631,8 @@ class Store:
                     return {'valid': True}
                 source.backup(self._conn)
                 self._conn.execute("PRAGMA journal_mode=WAL")
+                self._memory_search_dirty = None
+                self._memory_revision += 1
                 self._seed()
                 return self.stats()
         except (sqlite3.DatabaseError, json.JSONDecodeError, TypeError) as exc:

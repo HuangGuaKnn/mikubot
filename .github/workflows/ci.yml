@@ -33,5 +33,10 @@ jobs:
         with:
           python-version: '3.12'
       - run: docker compose build
+      - name: Validate optional resource limits and inherited protections
+        run: |
+          docker compose -f compose.yaml -f compose.low-memory.yaml config --quiet
+          docker compose -f compose.yaml -f compose.low-memory.yaml create
+          python -c "import json,subprocess; base=['docker','compose','-f','compose.yaml','-f','compose.low-memory.yaml']; cid=subprocess.check_output(base+['ps','--all','--quiet','mikubot'],text=True).strip(); c=json.loads(subprocess.check_output(['docker','inspect',cid],text=True))[0]; h=c['HostConfig']; assert h['Memory']==768*1024*1024 and h['NanoCpus']==1000000000; assert h['ReadonlyRootfs'] and h['PidsLimit']==128 and 'ALL' in h['CapDrop']; assert c['Config']['User']=='10001:10001'; assert h['LogConfig']['Config']['max-size']=='10m' and h['LogConfig']['Config']['max-file']=='3'; assert h['PortBindings']['8765/tcp'][0]['HostIp']=='127.0.0.1'"
       - run: python -c "import subprocess; from mikubot.sandbox import IMAGE; subprocess.run(['docker','pull',IMAGE],check=True)"
       - run: python scripts/check_docker_isolation.py --require

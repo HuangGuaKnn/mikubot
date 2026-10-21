@@ -19,6 +19,7 @@ import re
 import sqlite3
 import sys
 import threading
+import time
 import unicodedata
 from typing import Any, Awaitable, Callable
 from .settings import resolve_model
@@ -184,6 +185,8 @@ class _TermCache:
         size = sys.getsizeof(terms) + sum(sys.getsizeof(k) + sys.getsizeof(v) for k, v in terms.items()) + 256
         if size <= self.max_bytes:
             with self.lock:
+                if size > self.max_bytes:
+                    return terms
                 if key not in self.items:
                     while self.items and self.bytes + size > self.max_bytes:
                         _, (_, removed) = self.items.popitem(last=False)
@@ -196,6 +199,13 @@ class _TermCache:
         with self.lock:
             self.items.clear()
             self.bytes = 0
+
+    def resize(self, max_bytes):
+        with self.lock:
+            self.max_bytes = max_bytes
+            while self.items and self.bytes > max_bytes:
+                _, (_, removed) = self.items.popitem(last=False)
+                self.bytes -= removed
 
 
 def _documents(records: list[dict], terms_fn=tokenize) -> list[_Document]:
@@ -327,8 +337,14 @@ def _vectors(value: Any, expected_count: int, expected_dimension: int | None = N
     return result
 
 
+@dataclass
+class SemanticBudget:
+    deadline: float
+    exhausted: bool = False
+
+
 class MemoryEngine:
-    def __init__(self, store, settings, embedding_fn: Callable[..., Awaitable[list[list[float]]]] | None = None):
+    def __init__(self, store, settings, embedding_fn: Callable[..., Awaitable[list[list[float]]]] | None = None, *, foreground_busy=None):
         self.store, self.settings, self.embedding_fn = store, settings, embedding_fn
         self.index_path = Path(store.data_dir) / "memory_vectors.db"
         self._index_lock = threading.RLock()
@@ -339,6 +355,27 @@ class MemoryEngine:
         self._term_cache = _TermCache()
         self._generation = 0
         self._closed = False
+        self._read_capacity = 2
+        self._index_queue = asyncio.Queue(maxsize=8)
+        self._index_pending = set()
+        self._index_task = None
+        self._index_status = {'completed': 0, 'failed': 0, 'skipped': 0, 'last_error': None}
+        self._prune_offset = 0
+        self._foreground_busy = foreground_busy or (lambda: False)
+        self._configure_resources()
+
+    def _configure_resources(self):
+        options = self._config().get('memory', {})
+        cache_mb = options.get('term_cache_mb', 64)
+        cache_mb = cache_mb if type(cache_mb) is int and 0 <= cache_mb <= 256 else 64
+        self._term_cache.resize(cache_mb * 1024 * 1024)
+        capacity = options.get('read_concurrency', 2)
+        capacity = capacity if type(capacity) is int and 1 <= capacity <= 8 else 2
+        # Never replace a semaphore which still owns workers or waiters.
+        # A live change is applied at the next idle boundary.
+        if not self._pending_reads and self._read_capacity != capacity:
+            self._read_slots = asyncio.Semaphore(capacity)
+            self._read_capacity = capacity
 
     def _config(self) -> dict:
         full = self.settings if isinstance(self.settings, dict) else self.settings.get()
@@ -395,7 +432,7 @@ class MemoryEngine:
         return all(doc.record["id"] in visible and _record_hash(visible[doc.record["id"]]) == _record_hash(doc.record)
                    for doc in documents)
 
-    async def _embed(self, texts, scope_id, guard):
+    async def _embed(self, texts, scope_id, guard, *, background=False):
         if not guard():
             raise PermissionError("记忆授权或模型配置已变化")
         kwargs = {"scope_id": scope_id}
@@ -405,9 +442,136 @@ class MemoryEngine:
             parameters = inspect.signature(self.embedding_fn).parameters
             if "before_send" in parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
                 kwargs["before_send"] = guard
+            if 'background' in parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+                kwargs['background'] = background
         except (TypeError, ValueError):
             pass
         return await self.embedding_fn(texts, **kwargs)
+
+    def indexing_status(self):
+        return {**self._index_status, 'queued_batches': self._index_queue.qsize(),
+                'pending_chunks': len(self._index_pending),
+                'running': bool(self._index_task and not self._index_task.done())}
+
+    def _queue_index(self, documents, scope_id, user_id, config, dimension):
+        """Keep only bounded text chunks, never retain whole source documents."""
+        signature = self._signature(config, dimension)
+        chunks = []
+        for doc in documents[:MAX_SEMANTIC_CHUNKS]:
+            key = (doc.record['id'], doc.record['version'], doc.index, signature)
+            if key not in self._index_pending:
+                chunks.append({'key': key, 'id': doc.record['id'], 'version': doc.record['version'],
+                               'hash': _record_hash(doc.record), 'index': doc.index,
+                               'text': doc.embedding_text})
+        if not chunks:
+            return 0
+        if self._index_queue.full():
+            self._index_status['skipped'] += len(chunks)
+            return 0
+        self._index_pending.update(chunk['key'] for chunk in chunks)
+        self._index_queue.put_nowait((scope_id, user_id, self._generation,
+                                     self._request_config(config), signature, dimension, chunks))
+        if self._index_task is None or self._index_task.done():
+            self._index_task = asyncio.create_task(self._index_worker(), name='memory-index')
+            self._index_task.add_done_callback(self._index_finished)
+        return len(chunks)
+
+    def _index_finished(self, task):
+        if not task.cancelled():
+            task.exception()
+        if not self._closed and not self._index_queue.empty() and self._index_task is task:
+            self._index_task = asyncio.create_task(self._index_worker(), name='memory-index')
+            self._index_task.add_done_callback(self._index_finished)
+
+    async def _index_worker(self):
+        while not self._closed and not self._index_queue.empty():
+            scope_id, user_id, generation, request_config, signature, dimension, chunks = self._index_queue.get_nowait()
+            try:
+                def guard():
+                    if not self._guard(scope_id, user_id, generation, request_config):
+                        return False
+                    visible = self._visible(scope_id, user_id, record_ids=[c['id'] for c in chunks])
+                    return all(c['id'] in visible and _record_hash(visible[c['id']]) == c['hash'] for c in chunks)
+                # Let the foreground reply enter the model queue first. The
+                # provider also gives queued foreground work priority.
+                await asyncio.sleep(.1)
+                # Cold indexing must not take the sole model slot while the
+                # reply that discovered it is still retrieving/generating.
+                while not self._closed and self._foreground_busy():
+                    await asyncio.sleep(.1)
+                if not guard():
+                    self._index_status['skipped'] += len(chunks)
+                    continue
+                async with asyncio.timeout(30):
+                    values = _vectors(await self._embed([c['text'] for c in chunks], scope_id, guard,
+                                                       background=True), len(chunks), dimension)
+                    if guard():
+                        with self._index_lock:
+                            if self._closed or generation != self._generation:
+                                self._index_status['skipped'] += len(chunks)
+                                continue
+                            connection = self._connection()
+                            with connection:
+                                for chunk, vector in zip(chunks, values):
+                                    digest = _digest(chunk['text'])
+                                    connection.execute('INSERT OR REPLACE INTO vectors VALUES (?,?,?,?)',
+                                                       (signature, digest, dimension, json.dumps(vector)))
+                                    connection.execute('INSERT OR REPLACE INTO vector_refs VALUES (?,?,?,?,?,?)',
+                                                       (chunk['id'], chunk['version'], chunk['index'], chunk['hash'], signature, digest))
+                        self._index_status['completed'] += len(chunks)
+                        await self._read_async(self._prune_index, 128)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._index_status['failed'] += len(chunks)
+                self._index_status['last_error'] = type(exc).__name__
+                # Retrieval remains lexical; no remote body or secret enters
+                # this operational diagnostic.
+            finally:
+                self._index_pending.difference_update(c['key'] for c in chunks)
+                self._index_queue.task_done()
+
+    async def wait_for_index(self):
+        """Explicitly await indexing for prebuild/maintenance and orderly exit."""
+        if self._index_task is not None:
+            await asyncio.shield(self._index_task)
+
+    def _cached_candidates(self, signature, dimension, query_vector, scope_id, user_id, config, deadline, generation):
+        """Scan numeric vectors in batches; fetch only the best source bodies."""
+        best, cursor = {}, 0
+        while True:
+            if self._closed or deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('语义候选检索等待超时')
+            with self._index_lock:
+                if self._closed or generation != self._generation:
+                    raise PermissionError('记忆索引已变化')
+                batch = self._connection().execute('SELECT r.rowid,r.memory_id,r.version,v.vector FROM vector_refs r JOIN vectors v '
+                    'ON r.signature=v.signature AND r.content_hash=v.content_hash '
+                    'WHERE r.rowid>? AND r.signature=? AND v.dimension=? ORDER BY r.rowid LIMIT 64',
+                    (cursor, signature, dimension)).fetchall()
+            if not batch:
+                break
+            cursor = batch[-1][0]
+            versions = self.store.memory_candidate_versions(scope_id, user_id, [r[1] for r in batch],
+                       scope_allowed=lambda origin: self._permission(origin, config))
+            for _, memory_id, version, raw in batch:
+                if versions.get(memory_id) != version:
+                    continue
+                try:
+                    vector = _vectors([json.loads(raw)], 1, dimension)[0]
+                except (ValueError, TypeError):
+                    continue
+                score = sum(a*b for a,b in zip(vector, query_vector))
+                if memory_id in best:
+                    best[memory_id] = max(best[memory_id], score)
+                elif len(best) < 64:
+                    best[memory_id] = score
+                else:
+                    weakest = min(best, key=lambda key: (best[key], key))
+                    if (score, memory_id) > (best[weakest], weakest):
+                        del best[weakest]
+                        best[memory_id] = score
+        return sorted(best, key=lambda key: (best[key], key), reverse=True)
 
     def _signature(self, config: dict, dimension: int) -> str:
         model = resolve_model(config, 'embedding')
@@ -432,16 +596,23 @@ class MemoryEngine:
                         chunk_index INTEGER NOT NULL, record_hash TEXT NOT NULL,
                         signature TEXT NOT NULL, content_hash TEXT NOT NULL,
                         PRIMARY KEY(memory_id,version,chunk_index,signature));
+                    CREATE INDEX IF NOT EXISTS vector_refs_hash ON vector_refs(signature,content_hash);
                 """)
                 self._index.commit()
             return self._index
 
-    def _prune_index(self) -> None:
+    def _prune_index(self, batch_limit=None) -> None:
         # Only identifiers/hashes are kept in the derived DB; even a stale cache
         # entry cannot manufacture a text result after correction or deletion.
         with self._index_lock:
-            connection = self._connection()
-            refs = connection.execute("SELECT memory_id,version,chunk_index,record_hash,signature FROM vector_refs").fetchall()
+            connection, generation = self._index, self._generation
+            if connection is None or self._closed:
+                return
+            sql = 'SELECT memory_id,version,chunk_index,record_hash,signature FROM vector_refs ORDER BY memory_id,version,chunk_index,signature'
+            refs = connection.execute(sql if batch_limit is None else sql + ' LIMIT ? OFFSET ?',
+                                      () if batch_limit is None else (batch_limit, self._prune_offset)).fetchall()
+            if batch_limit is not None:
+                self._prune_offset = self._prune_offset + len(refs) if len(refs) == batch_limit else 0
         active, by_owner, visible_by_owner = {}, {}, {}
         for key in {row[0] for row in refs}:
             try: record = self.store.get_memory(key)
@@ -452,7 +623,8 @@ class MemoryEngine:
         for identity, keys in by_owner.items():
             visible_by_owner[identity] = {item['id'] for item in self.store.visible_memories(*identity, record_ids=keys)}
         with self._index_lock:
-            connection = self._connection()
+            if self._closed or generation != self._generation or self._index is not connection:
+                return
             with connection:
                 for memory_id, version, chunk_index, record_hash, signature in refs:
                     record = active.get(memory_id)
@@ -465,7 +637,33 @@ class MemoryEngine:
                                            (memory_id, version, chunk_index, signature))
                 connection.execute("DELETE FROM vectors WHERE NOT EXISTS (SELECT 1 FROM vector_refs r WHERE r.signature=vectors.signature AND r.content_hash=vectors.content_hash)")
 
-    async def _semantic(self, docs: list[_Document], query: str, scope_id: str, user_id: str, config: dict) -> dict:
+    def _cached_scores(self, docs, signature, dimension, query_vector, candidate_keys, deadline, generation):
+        """Batch SQL and decode one vector at a time, never retain a full index."""
+        by_hash = {}
+        for doc in docs:
+            by_hash.setdefault(_digest(doc.embedding_text), []).append(doc)
+        scores = {}
+        hashes = list(by_hash)
+        for start in range(0, len(hashes), 64):
+            if self._closed or deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('语义缓存读取已超过在线等待上限')
+            part = hashes[start:start + 64]
+            with self._index_lock:
+                if self._closed or generation != self._generation:
+                    raise PermissionError('记忆索引已变化')
+                rows = self._connection().execute('SELECT content_hash,vector,dimension FROM vectors WHERE signature=? AND content_hash IN (' + ','.join('?' for _ in part) + ')',
+                                                  (signature, *part)).fetchall()
+            for content_hash, raw, size in rows:
+                try:
+                    vector = _vectors([json.loads(raw)], 1, dimension)[0] if size == dimension else None
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    vector = None
+                if vector is not None:
+                    similarity = sum(a * b for a, b in zip(query_vector, vector))
+                    scores.update((doc.key, similarity) for doc in by_hash[content_hash])
+        return scores, [doc for doc in docs if doc.key in candidate_keys and doc.key not in scores]
+
+    async def _semantic(self, docs: list[_Document], query: str, scope_id: str, user_id: str, config: dict, *, deadline=None) -> dict:
         status = {"enabled": True, "used": False, "cache_hits": 0, "embedded_chunks": 0, "dimension": None, "error": None}
         if not self.embedding_fn or not query.strip() or not docs:
             status["reason"] = "未提供向量服务" if not self.embedding_fn else "没有待检索内容"
@@ -492,58 +690,61 @@ class MemoryEngine:
                 if not guard():
                     status["reason"] = "记忆授权、模型配置或索引已变化"
                     return status
-                self._prune_index()
-                cached, missing = {}, []
-                with self._index_lock:
-                    connection = self._connection()
-                    candidate_keys = {doc.key for doc in candidate_docs}
-                    # Already-indexed authorized chunks participate even when
-                    # a new paraphrase has no useful lexical preselection.
+                extra_ids = await self._read_async(self._cached_candidates, signature, dimension, query_vector,
+                                                   scope_id, user_id, config, deadline, generation)
+                extra_ids = set(extra_ids) - {doc.record['id'] for doc in docs}
+                if extra_ids:
+                    extra = self._visible(scope_id, user_id, record_ids=extra_ids)
+                    docs.extend(_documents([r for r in extra.values() if r.get('property') != 'memory_relation'], self._term_cache.terms))
                     for doc in docs:
-                        content_hash = _digest(doc.embedding_text)
-                        row = connection.execute("SELECT vector,dimension FROM vectors WHERE signature=? AND content_hash=?",
-                                                 (signature, content_hash)).fetchone()
-                        try:
-                            vector = _vectors([json.loads(row[0])], 1, dimension)[0] if row and row[1] == dimension else None
-                        except (ValueError, TypeError, json.JSONDecodeError):
-                            vector = None
-                        if vector is None and doc.key in candidate_keys:
-                            missing.append(doc)
-                        elif vector is not None:
-                            cached[doc.key] = vector
-                            status["cache_hits"] += 1
+                        doc.bm25, doc.score, doc.matched = 0., 0., []
+                    _rank_lexical(docs, query, user_id)
+                # Already-indexed authorized chunks still participate outside
+                # the cold-build budget, without retaining every large vector.
+                cached, missing = await self._read_async(self._cached_scores, docs, signature, dimension,
+                                                         query_vector, {doc.key for doc in candidate_docs}, deadline, generation)
+                status["cache_hits"] = len(cached)
+                new_vectors = {}
                 if missing:
                     # Re-select the batch after the query await, rather than
                     # merely dropping stale results after already sending text.
                     visible = self._visible(scope_id, user_id, record_ids=[doc.record['id'] for doc in missing])
                     missing = [doc for doc in missing if doc.record["id"] in visible
                                and _record_hash(visible[doc.record["id"]]) == _record_hash(doc.record)]
-                    if missing:
+                    if missing and config.get('memory', {}).get('background_indexing', True):
+                        status['queued_chunks'] = self._queue_index(missing, scope_id, user_id, config, dimension)
+                        status['reason'] = '缺失向量已排队构建，本轮使用已有索引与词法结果'
+                    elif missing:
                         batch_guard = lambda: self._guard(scope_id, user_id, generation, request_config, missing)
                         values = _vectors(await self._embed([doc.embedding_text for doc in missing], scope_id, batch_guard), len(missing), dimension)
                         for doc, vector in zip(missing, values):
-                            cached[doc.key] = vector
+                            new_vectors[doc.key] = vector
+                            cached[doc.key] = sum(a * b for a, b in zip(query_vector, vector))
                         status["embedded_chunks"] = len(missing)
                 if not guard() or self._signature(self._config(), dimension) != signature:
                     status["reason"] = "模型配置或索引已变化"
                     return status
                 visible = self._visible(scope_id, user_id, record_ids=[key[0] for key in cached])
                 with self._index_lock:
+                    if self._closed or generation != self._generation:
+                        status['reason'] = '记忆索引已变化'
+                        return status
                     connection = self._connection()
                     with connection:
                         for doc in docs:
                             current = visible.get(doc.record["id"])
                             if current is None or _record_hash(current) != _record_hash(doc.record):
                                 continue
-                            vector = cached.get(doc.key)
-                            if vector is None:
+                            similarity = cached.get(doc.key)
+                            if similarity is None:
                                 continue
                             content_hash = _digest(doc.embedding_text)
-                            connection.execute("INSERT OR REPLACE INTO vectors(signature,content_hash,dimension,vector) VALUES (?,?,?,?)",
-                                               (signature, content_hash, dimension, json.dumps(vector)))
-                            connection.execute("INSERT OR REPLACE INTO vector_refs(memory_id,version,chunk_index,record_hash,signature,content_hash) VALUES (?,?,?,?,?,?)",
+                            if doc.key in new_vectors:
+                                connection.execute("INSERT OR REPLACE INTO vectors(signature,content_hash,dimension,vector) VALUES (?,?,?,?)",
+                                                   (signature, content_hash, dimension, json.dumps(new_vectors[doc.key])))
+                            connection.execute("INSERT OR IGNORE INTO vector_refs(memory_id,version,chunk_index,record_hash,signature,content_hash) VALUES (?,?,?,?,?,?)",
                                                (doc.record["id"], doc.record["version"], doc.index, _record_hash(doc.record), signature, content_hash))
-                            doc.semantic = sum(a * b for a, b in zip(query_vector, vector))
+                            doc.semantic = similarity
                 semantic_rank = {doc.key: rank for rank, doc in enumerate(sorted(docs, key=lambda item: item.semantic if item.semantic is not None else -2, reverse=True), start=1) if doc.semantic is not None and doc.semantic >= 0.25}
                 lexical_rank = {doc.key: rank for rank, doc in enumerate(sorted(docs, key=lambda item: item.bm25, reverse=True), start=1) if doc.bm25 > 0}
                 for doc in docs:
@@ -563,7 +764,11 @@ class MemoryEngine:
         return status
 
     def _rank_snapshot(self, scope_id, user_id, config, query):
-        records = [record for record in self._visible(scope_id, str(user_id), config).values()
+        if not self._permission(scope_id, config):
+            return []
+        candidates = self.store.memory_candidate_ids(scope_id, str(user_id), query,
+                        scope_allowed=lambda origin: self._permission(origin, config))
+        records = [record for record in self._visible(scope_id, str(user_id), config, record_ids=candidates).values()
                    if record.get('property') != 'memory_relation']
         docs = _documents(records, self._term_cache.terms)
         _rank_lexical(docs, query, str(user_id))
@@ -598,7 +803,10 @@ class MemoryEngine:
         return await self._read_async(self._rank_snapshot, scope_id, user_id, config, query)
 
     async def _read_async(self, function, *args):
-        if self._pending_reads >= 32:
+        self._configure_resources()
+        queue_limit = self._config().get('memory', {}).get('read_queue_limit', 32)
+        queue_limit = queue_limit if type(queue_limit) is int and 1 <= queue_limit <= 200 else 32
+        if self._pending_reads >= queue_limit:
             raise ValueError('记忆检索队列已满，请稍后重试')
         self._pending_reads += 1
         try:
@@ -620,7 +828,7 @@ class MemoryEngine:
         finally:
             self._pending_reads -= 1
 
-    async def inspect(self, scope_id: str, user_id: str, query: str, limit: int = 8) -> dict:
+    async def inspect(self, scope_id: str, user_id: str, query: str, limit: int = 8, *, semantic_deadline=None) -> dict:
         if self._closed:
             raise RuntimeError("记忆引擎已关闭")
         if not isinstance(query, str) or len(query) > 12000:
@@ -629,13 +837,18 @@ class MemoryEngine:
             raise ValueError("limit 必须为正整数")
         config = self._config()
         options = config.get("memory") or {}
+        shared_budget = semantic_deadline if isinstance(semantic_deadline, SemanticBudget) else None
+        if shared_budget is not None:
+            semantic_deadline = shared_budget.deadline
+        if semantic_deadline is None:
+            semantic_deadline = asyncio.get_running_loop().time() + options.get('semantic_timeout_seconds', 8)
         configured_limit = options.get("top_k", 8)
         configured_limit = configured_limit if isinstance(configured_limit, int) and not isinstance(configured_limit, bool) and configured_limit > 0 else 8
         limit = min(limit, configured_limit, 30)
         docs = await self._rank_async(scope_id, str(user_id), config, query)
         if self._closed:
             raise RuntimeError('记忆引擎已关闭')
-        if self._index is not None:
+        if self._index is not None and not options.get('background_indexing', True):
             try:
                 await self._read_async(self._prune_index)
             except (sqlite3.DatabaseError, ValueError, TypeError):
@@ -643,7 +856,26 @@ class MemoryEngine:
         semantic = {"enabled": bool(options.get("semantic_enabled", False)), "used": False,
                     "cache_hits": 0, "embedded_chunks": 0, "error": None}
         if semantic["enabled"]:
-            semantic = await self._semantic(docs, query, scope_id, str(user_id), config)
+            lexical_scores = [(doc.score, doc.semantic) for doc in docs]
+            try:
+                # Includes the engine lock, model queue and both query/chunk
+                # requests. Provider phase timeouts alone cannot bound recall.
+                if shared_budget is not None and shared_budget.exhausted or asyncio.get_running_loop().time() >= semantic_deadline:
+                    raise TimeoutError()
+                async with asyncio.timeout_at(semantic_deadline):
+                    semantic = await self._semantic(docs, query, scope_id, str(user_id), config, deadline=semantic_deadline)
+            except TimeoutError:
+                if shared_budget is not None:
+                    # Some event loops deliver short timers slightly early.
+                    # Once one phase exhausts this reply's allowance, no later
+                    # query may start another billable embedding request.
+                    shared_budget.exhausted = True
+                for doc, (score, previous) in zip(docs, lexical_scores):
+                    doc.score, doc.semantic = score, previous
+                for doc in docs[len(lexical_scores):]:
+                    doc.semantic = None
+                semantic.update(error='TimeoutError', reason='语义检索等待超时，已使用词法检索')
+        semantic['indexing'] = self.indexing_status()
         stats = await self._read_async(self.store.memory_use_stats, scope_id, str(user_id))
         for doc in docs:
             use = stats.get(doc.record["id"], {})
@@ -679,8 +911,8 @@ class MemoryEngine:
                 "items": combined[:limit], "results": combined[:limit], "related": related, "semantic": semantic,
                 "tokenizer": "英文整词＋中文词典分词/二字片段/低权重单字", "algorithm": "BM25 k1=1.2 b=0.75" + (" + weighted RRF" if mode == "hybrid" else "")}
 
-    async def recall(self, scope_id: str, user_id: str, query: str, limit: int = 8) -> list[dict]:
-        return (await self.inspect(scope_id, user_id, query, limit))["items"]
+    async def recall(self, scope_id: str, user_id: str, query: str, limit: int = 8, *, semantic_deadline=None) -> list[dict]:
+        return (await self.inspect(scope_id, user_id, query, limit, semantic_deadline=semantic_deadline))["items"]
 
     async def recall_local(self, scope_id: str, user_id: str, query: str, limit: int = 4) -> list[dict]:
         """A cached lexical preview for the Planner; never invokes embeddings.
@@ -937,8 +1169,8 @@ class MemoryEngine:
             return {"created": 0, "suggestions": [], "message": "当前聊天未授权"}
         suggestions, groups = [], {}
         with self.store._lock, self.store._conn:
-            records = [item for item in self.store.list_memories(scope_id=scope_id, status="active")
-                       if self._organization_source(item, scope_id, user_id)][:1000]
+            records = [item for item in self.store.user_memory_records(scope_id, user_id, limit=1000)
+                       if self._organization_source(item, scope_id, user_id)]
             now = utc_now()
             for item in records:
                 if item.get("valid_to") and item["valid_to"] <= now:
@@ -1048,8 +1280,10 @@ class MemoryEngine:
             return self.store._write("events", event, ("created_at", "kind"))
 
     def clear_index(self) -> dict:
+        self._cancel_indexing()
         with self._index_lock:
             self._generation += 1
+            self._prune_offset = 0
             if self._index is not None:
                 self._index.close()
                 self._index = None
@@ -1058,6 +1292,8 @@ class MemoryEngine:
             return {"cleared": True}
 
     def close(self) -> None:
+        self._closed = True
+        self._cancel_indexing()
         self._term_cache.clear()
         with self._index_lock:
             self._generation += 1
@@ -1065,3 +1301,16 @@ class MemoryEngine:
                 self._index.close()
                 self._index = None
             self._closed = True
+
+    def _cancel_indexing(self):
+        if self._index_task is not None and not self._index_task.done():
+            self._index_task.cancel()
+        while not self._index_queue.empty():
+            *_, chunks = self._index_queue.get_nowait()
+            self._index_pending.difference_update(c['key'] for c in chunks)
+            self._index_queue.task_done()
+
+    async def aclose(self):
+        self.close()
+        if self._index_task is not None:
+            await asyncio.gather(self._index_task, return_exceptions=True)

@@ -12,7 +12,7 @@ window.MikubotExperience = (() => {
   const safeLink = value => /^(https?:\/\/|\/(?!\/))/i.test(String(value || "")) ? String(value) : "";
   const safeId = id => encodeURIComponent(String(id || ""));
   const _pageRuntime={get liveSource(){return liveSource},set liveSource(value){liveSource=value},get watchedJob(){return watchedJob},set watchedJob(value){watchedJob=value},get renderedPage(){return renderedPage},set renderedPage(value){renderedPage=value},get pairTimer(){return pairTimer},set pairTimer(value){pairTimer=value},get attachments(){return attachments},set attachments(value){attachments=value},get attachmentScope(){return attachmentScope},set attachmentScope(value){attachmentScope=value},get distillDraft(){return distillDraft},set distillDraft(value){distillDraft=value},get currentJob(){return currentJob},set currentJob(value){currentJob=value},get pair(){return pair},set pair(value){pair=value}};
-  const {renderChat,sessionSidebar,attachmentChips,sendChat}=window.MikubotExperienceChat.create(_pageRuntime,{inactive,jobDetail:(...args)=>jobDetail(...args)});
+  const {renderChat,sessionSidebar,attachmentChips,sendChat,releaseAttachments}=window.MikubotExperienceChat.create(_pageRuntime,{inactive,jobDetail:(...args)=>jobDetail(...args)});
   const {jobDetail,renderJobs}=window.MikubotExperienceJobs.create(_pageRuntime,{jobNames,inactive,safeId,safeLink});
   const {renderSettings,localConnectorPanel,schedulerPanel,pollPairing}=window.MikubotExperienceConfig.create(_pageRuntime,{safeId});
   const {distillChooser,characterForm,generateForm,profilePanel,profileForm,profileBindForm,corpusForm,showDistillPreview}=window.MikubotExperiencePersona.create(_pageRuntime,{safeLink});
@@ -22,6 +22,13 @@ window.MikubotExperience = (() => {
     const configured = configuredModel();
     const known = record.cost_known === true || record.price_configured === true || Number(record.cost) > 0 || Number(configured.input_price) > 0 || Number(configured.output_price) > 0;
     return record.cost_known === false || !known ? "费用未知" : `¥ ${Number(record.cost || 0).toFixed(4)}`;
+  }
+
+  async function attachmentManager(offset=0,scopeId=state.scope) {
+    const data=await api(`/api/chat/attachments?${query({scope_id:scopeId,offset,limit:50})}`);
+    const purposes={context:"临时参考",memory:"长期资料记录",legacy_unknown:"旧版资料 · 用途未知"};
+    const items=rows(data).map(item=>`<article class="record-card"><h3>${e(item.name || "资料")}</h3><p>${e(purposes[item.purpose] || "用途未知")} · ${e(item.characters || 0)} 字符 · ${e(fmt(item.created_at))}</p><p>${item.in_use ? "聊天或后台任务正在使用，自动清理会跳过。" : "当前没有进行中的引用。"}${item.memory_id ? " 正文保存在长期资料中，删除此记录不会删除知识正文。" : ""}</p><div class="record-actions">${button("预览与管理","attachment-preview","small","file",`data-id="${e(item.id)}" data-scope="${e(scopeId)}"`)}${item.purpose==="context"&&!item.in_use ? button("用于下一条消息","attachment-reuse","ghost small","",`data-id="${e(item.id)}" data-name="${e(item.name)}" data-scope="${e(scopeId)}"`) : ""}</div></article>`).join("");
+    openModal("资料管理","刷新或重启后仍可在这里管理。临时参考24小时后可自动回收；旧版用途未知资料仅在你预览确认后删除。",`<p>临时参考 ${e(data.temporary_count || 0)} / ${e(data.temporary_limit || 200)}（全部会话共用）；长期资料不占此配额。本会话共 ${e(data.total || 0)} 份记录。</p>${button("预览安全清理","attachment-cleanup","ghost small","trash",`data-scope="${e(scopeId)}"`)}<div class="record-grid">${items || '<p>暂无资料记录。</p>'}</div><div class="record-actions">${offset ? button("上一页","attachment-manager","ghost small","",`data-offset="${Math.max(0,offset-50)}" data-scope="${e(scopeId)}"`) : ""}${offset+50<(data.total || 0) ? button("下一页","attachment-manager","ghost small","",`data-offset="${offset+50}" data-scope="${e(scopeId)}"`) : ""}</div>`);
   }
 
 
@@ -79,7 +86,7 @@ window.MikubotExperience = (() => {
   async function handleAction(action,target) {
     if(window.MikubotUpdates && await window.MikubotUpdates.handleAction(action,target))return true;
     const id = target.dataset.id;
-    if (action === "new-chat") { if (state.sending) throw new Error("请先等待当前回复或停止等待。"); const result = await api("/api/scopes",{method:"POST",body:{name:"新对话",kind:"web",private_reply_policy:"always"}}), item = result.scope || result; state.scope = item.id; state.draft="";state.images=[]; attachments=[]; localStorage.setItem("qunyu-scope",state.scope); await bootstrap(); await navigate("chat"); }
+    if (action === "new-chat") { if (state.sending) throw new Error("请先等待当前回复或停止等待。"); await releaseAttachments(); const result = await api("/api/scopes",{method:"POST",body:{name:"新对话",kind:"web",private_reply_policy:"always"}}), item = result.scope || result; state.scope = item.id; state.draft="";state.images=[]; attachments=[]; localStorage.setItem("qunyu-scope",state.scope); await bootstrap(); await navigate("chat"); }
     else if (action === "start-distill") distillChooser();
     else if (action === "distill-character") characterForm();
     else if (action === "persona-generate") generateForm();
@@ -126,9 +133,28 @@ window.MikubotExperience = (() => {
     else if (action === "runtime-check") {const result=await api("/api/computer/runtimes");openModal("执行环境检查","不会安装组件，也不会运行任务。",notice(result.docker.message,result.docker.available?"":"warning"));}
     else if (action === "check-admin-pairing") { if(!pair?.id)throw new Error("请重新生成配对码。");const result=await api(`/api/admins/pairing/${safeId(pair.id)}`);pair={...pair,...result};const account=result.identity || result.candidate || result.account || result.user;$("#pairing-result").innerHTML=result.status === "bound" ? notice("管理员已绑定，配对码已失效。", "success") : account ? `<div class="local-connector-result"><strong>${e(account.label || account.nickname || "收到配对消息")}</strong><p>${e(account.platform || "qq")} · ${e(account.user_id || account.account_id)}</p>${button("确认添加此管理员","confirm-admin-pairing","primary small","shield")}</div>` : notice(result.message || "尚未收到配对消息，请检查 QQ 连接后重试。", "warning"); }
     else if (action === "confirm-admin-pairing") { if(!pair?.id)throw new Error("请重新生成配对码。");await api(`/api/admins/pairing/${safeId(pair.id)}/confirm`,{method:"POST",body:{}});pair=null;closeModal();toast("QQ 管理员已绑定");await bootstrap(); }
-    else if (action === "attachment-options" || action === "upload-note") openModal("上传资料，选择用途","文件解析保存在本机；作为模型参考的选中文本会发送给你配置的模型服务。",`<div class="distill-options"><button class="distill-option" data-action="choose-attachment" data-purpose="context">${icon("file")}<strong>仅本次对话参考</strong><small>作为下一条消息附件，不写入长期记忆。</small></button><button class="distill-option" data-action="choose-attachment" data-purpose="memory">${icon("memory")}<strong>保存为长期资料</strong><small>放入当前会话的可检索资料，之后可编辑或删除。</small></button><button class="distill-option" data-action="distill-corpus">${icon("persona")}<strong>蒸馏人格</strong><small>上传 ZIP，独立分析目标人物，不写入当前记忆。</small></button></div>`);
+    else if (action === "attachment-options" || action === "upload-note") openModal("上传资料，选择用途","文件解析保存在本机；作为模型参考的选中文本会发送给你配置的模型服务。",`<div class="distill-options"><button class="distill-option" data-action="choose-attachment" data-purpose="context">${icon("file")}<strong>仅本次对话参考</strong><small>下一条消息参考；合计最多8万字符，未使用资料24小时后自动回收。</small></button><button class="distill-option" data-action="choose-attachment" data-purpose="memory">${icon("memory")}<strong>保存为长期资料</strong><small>最多30万字符，放入当前会话的可检索资料，不占临时附件配额。</small></button><button class="distill-option" data-action="distill-corpus">${icon("persona")}<strong>蒸馏人格</strong><small>上传 ZIP，独立分析目标人物，不写入当前记忆。</small></button></div>${button("管理已上传的资料","attachment-manager","ghost","file")}`);
+    else if (action === "attachment-manager") await attachmentManager(Number(target.dataset.offset)||0,target.dataset.scope || state.scope);
+    else if (action === "attachment-preview") {
+      const scopeId=target.dataset.scope || state.scope,item=await api(`/api/chat/attachments/${safeId(id)}?${query({scope_id:scopeId})}`);
+      openModal("资料预览",item.in_use ? "此资料正在被使用。主动删除会撤回来源，后续模型发送或电脑操作将停止。" : "删除不可撤销；仅删除本机参考或导入记录，不删除已有长期知识正文。",`<h3>${e(item.name || "资料")}</h3>${item.purpose==="legacy_unknown" ? notice("旧版记录没有用途信息，请核对后再决定删除。","warning") : ""}<pre class="record-text">${e(item.preview || "正文保存在长期资料中，请到记忆档案查看。")}</pre><p class="help-caption">预览最多显示2000字符。</p>${button("返回资料管理","attachment-manager","ghost","",`data-scope="${e(scopeId)}"`)}${button("删除并撤回参考","attachment-delete","ghost","trash",`data-id="${e(id)}" data-scope="${e(scopeId)}"`)}`);
+    }
+    else if (action === "attachment-delete") {
+      const scopeId=target.dataset.scope || state.scope;
+      await confirmAction("删除这份参考记录？","此操作会撤回资料来源；正在使用它的模型请求或电脑任务将停止后续操作。长期知识正文保持不变。",async()=>{await api(`/api/chat/attachments/${safeId(id)}?${query({scope_id:scopeId})}`,{method:"DELETE"});attachments=attachments.filter(item=>item.id!==id);},"删除并撤回");
+    }
+    else if (action === "attachment-reuse") {
+      if(state.sending || (target.dataset.scope && target.dataset.scope!==state.scope))throw new Error("请回到资料所属聊天，并等待本轮回复结束。");
+      if(attachments.length>=5)throw new Error("一次最多引用5个附件。");
+      const item=await api(`/api/chat/attachments/${safeId(id)}?${query({scope_id:state.scope})}`);
+      if(!attachments.some(ref=>ref.id===id))attachments.push({id,name:item.name});attachmentScope=state.scope;closeModal();await renderPage();
+    }
+    else if (action === "attachment-cleanup") {
+      const scopeId=target.dataset.scope || state.scope,preview=await api('/api/chat/attachments/cleanup',{method:'POST',body:{scope_id:scopeId,preview:true}});
+      await confirmAction("清理已释放或过期的资料？",`${preview.eligible_ids?.length || 0}份可安全回收。在用任务和用途未知的旧版资料会保留。`,async()=>{await api('/api/chat/attachments/cleanup',{method:'POST',body:{scope_id:scopeId,preview:false}});},"安全清理");
+    }
     else if (action === "choose-attachment") { state.attachmentPurpose=target.dataset.purpose;$("#attachment-input").click(); }
-    else if (action === "remove-attachment") { attachments.splice(Number(target.dataset.index),1);$("#attachment-chips").innerHTML=attachmentChips(); }
+    else if (action === "remove-attachment") { if(state.sending)throw new Error("请先等待当前回复结束。");const index=Number(target.dataset.index),item=attachments[index];if(item){await releaseAttachments([item]);attachments.splice(index,1);}$("#attachment-chips").innerHTML=attachmentChips(); }
     else if (action === "list-models") await listModels(target);
     else return false;
     return true;
@@ -173,7 +199,20 @@ window.MikubotExperience = (() => {
     if(target.name === "selected_account"){const form=target.closest("form");$('[name="account_id"]',form).value=target.value;return true;}
     if(target.id === "chat-mode"){state.chatMode=target.value;if(target.value === "computer" && !state.settings.computer?.enabled)toast("电脑任务尚未开启，请在机器人设置中开启并指定工作目录。",true);state.draft=$("#chat-text")?.value || state.draft;await renderPage();return true;}
     if(target.id === "corpus-input" && target.files[0]){const file=target.files[0];target.value="";if(file.size>24*1024*1024)throw new Error("ZIP 文件不能超过 24 MB。请减少语料后重试。");const data=new FormData();data.append("file",file);toast("正在识别 ZIP 中的可读文件与说话者…");const result=await api("/api/persona/distill/corpus",{method:"POST",body:data});distillDraft={...result,mode:"corpus"};showDistillPreview();return true;}
-    if(target.id === "attachment-input" && target.files[0]){const file=target.files[0];target.value="";if(file.size>8*1024*1024)throw new Error("单份资料不能超过 8 MB。");const purpose=state.attachmentPurpose || "context",data=new FormData();data.append("file",file);data.append("scope_id",state.scope);data.append("purpose",purpose);const result=await api("/api/chat/attachments",{method:"POST",body:data});if(purpose === "context"){const item=result.attachment || result;if(!item.id)throw new Error("附件未返回有效标识，请重新上传。");attachments.push({...item,name:file.name});attachmentScope=state.scope;}closeModal();toast(result.message || (purpose === "memory" ? "已保存为当前会话的长期资料。" : "资料已附加，发送下一条消息时参考。"));await bootstrap();return true;}
+    if(target.id === "attachment-input" && target.files[0]){
+      const file=target.files[0],scopeId=state.scope;target.value="";
+      if(file.size>8*1024*1024)throw new Error("单份资料不能超过 8 MB。");
+      const purpose=state.attachmentPurpose || "context",data=new FormData();
+      if(purpose==="context" && attachments.length>=5)throw new Error("一次最多引用5个附件。");
+      data.append("file",file);data.append("scope_id",scopeId);data.append("purpose",purpose);
+      const result=await api("/api/chat/attachments",{method:"POST",body:data});
+      if(purpose === "context"){
+        const item=result.attachment || result;if(!item.id)throw new Error("附件未返回有效标识，请重新上传。");
+        if(state.scope!==scopeId){await releaseAttachments([item],scopeId);toast("聊天已切换，未使用的参考资料已释放。");return true;}
+        attachments.push({...item,name:file.name});attachmentScope=scopeId;
+      }
+      closeModal();toast(result.message || (purpose === "memory" ? "已保存为当前会话的长期资料。" : "资料已附加，发送下一条消息时参考。"));await bootstrap();return true;
+    }
     return false;
   }
 

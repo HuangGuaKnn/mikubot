@@ -135,6 +135,14 @@ async function fullScriptIntegration(){
   assert.match(element("#content").innerHTML,/本会话模型/);
   assert.match(element("#navigation").innerHTML,/模型供应商/);
   assert.match(element("#navigation").innerHTML,/运行日志/);
+  assert.equal(element("#port-warning").hidden,true);
+  vm.runInContext('state.boot.listener={port_changed:true,requested_port:8765,actual_port:8766,port_warning:"请求8765，实际8766。OneBot <script>bad</script>"}; renderNavigation();',browser);
+  assert.equal(element("#port-warning").hidden,false);
+  assert.match(element("#port-warning").textContent,/请求8765，实际8766/);
+  assert.ok(!element("#port-warning").innerHTML.includes("<script>"),"startup warnings are text, not executable HTML");
+  vm.runInContext('state.boot.listener={port_changed:false,port_warning:""}; renderNavigation();',browser);
+  assert.equal(element("#port-warning").hidden,true);
+  assert.equal(element("#port-warning").textContent,"");
   const personas=await vm.runInContext("window.MikubotExperience.renderPersonas()",browser);
   assert.match(personas,/蒸馏人格/);
   const settingsHTML=await vm.runInContext("window.MikubotExperience.renderSettings()",browser);

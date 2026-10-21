@@ -7,6 +7,7 @@ import math
 import re
 import time
 import heapq
+import uuid
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
@@ -14,6 +15,8 @@ from urllib.parse import urlsplit
 import httpx
 from .settings import resolve_model
 from .timezones import config_zone, day_bounds
+from .model_stream import receive_chat, ModelStreamError
+from .chat_preview import emit_preview, preview_active
 
 
 class ProviderError(ValueError):
@@ -58,7 +61,7 @@ def request_timeout(config):
     return httpx.Timeout(seconds, connect=min(12, seconds))
 
 
-BACKGROUND_PURPOSES = {'knowledge', 'memory_extract', 'memory', 'jargon_learning', 'expression_learning', 'context_digest', 'distillation', 'sticker_vision', 'sticker_select'}
+BACKGROUND_PURPOSES = {'knowledge', 'memory_extract', 'memory', 'jargon_learning', 'expression_learning', 'context_digest', 'distillation', 'sticker_vision', 'sticker_select', 'embedding_index'}
 
 
 class _PriorityGate:
@@ -149,6 +152,7 @@ class Provider:
         self._call_lock = asyncio.Lock()
         self._provider_locks = {}
         self._background_gate = _PriorityGate()
+        self._global_gate = _PriorityGate(2, 32)
         self._reservations = {}
         self._health = {}
 
@@ -163,6 +167,8 @@ class Provider:
         items = [dict(config['model'], id='default', name='默认模型', enabled=True), *[resolve_model(config,model_id=x['id']) for x in config.get('providers', [])]]
         now = time.monotonic()
         return {'scheduler': {'background_concurrency': 1, 'background_running': self._background_gate.locked(),
+                              'global_concurrency': self._global_gate.capacity, 'global_running': self._global_gate.active,
+                              'global_queued': sum(self._global_gate.counts().values()),
                               'background_queued': sum(self._background_gate.counts().values()),
                               'foreground_queued': sum(x.counts()['foreground'] for x in self._provider_locks.values())},
                 'routes': {key: {**{k: v for k, v in self.resolve(key).items() if k in ('id', 'name', 'model', 'enabled', 'vision', 'tools')}, 'provider_id': self.resolve(key).get('id', 'default')} for key in ('chat', 'planner', 'memory', 'gate', 'summary', 'embedding')},
@@ -185,16 +191,22 @@ class Provider:
         gate.capacity=scheduler.get('model_concurrency',1)
         gate.queue_limit=scheduler.get('model_queue_limit',32)
         self._background_gate.queue_limit=scheduler.get('background_queue_limit',16)
+        self._global_gate.capacity=scheduler.get('global_model_concurrency',2)
+        self._global_gate.queue_limit=scheduler.get('global_model_queue_limit',32)
         if background:
             await self._background_gate.acquire(10)
-        acquired = False
+        acquired = global_acquired = False
         try:
+            await self._global_gate.acquire(10 if background else 0)
+            global_acquired = True
             await gate.acquire(10 if background else 0)
             acquired = True
             yield
         finally:
             if acquired:
                 gate.release()
+            if global_acquired:
+                self._global_gate.release()
             if background:
                 self._background_gate.release()
 
@@ -216,14 +228,15 @@ class Provider:
         pending = list(self._reservations.values()) if pending is None else pending
         reserved = [x for x in pending if x['purpose'] == 'planner' and x['scope_id'] == scope_id]
         if limits['daily_calls'] and used['calls'] + len(reserved) + (1 if estimated_input else 0) > limits['daily_calls']:
-            raise ProviderBudgetExceededError('当前会话今日 Planner 次数已达上限。')
+            raise self._budget_error('当前会话今日 Planner 次数已达上限。')
         tokens = used['tokens'] + sum(x['input_tokens'] + x['output_tokens'] for x in reserved) + estimated_input + max_output
         if limits['daily_tokens'] and tokens > limits['daily_tokens']:
-            raise ProviderBudgetExceededError('当前会话今日 Planner Token 预算不足。')
+            raise self._budget_error('当前会话今日 Planner Token 预算不足。')
 
     @staticmethod
     def _same_model(left, right):
-        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type')
+        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type',
+                  'stream_mode', 'first_token_timeout_seconds', 'total_timeout_seconds', 'timeout_fallback')
         return all(left.get(key) == right.get(key) for key in fields)
 
     def _check_send(self, before_send):
@@ -240,6 +253,15 @@ class Provider:
             scope = self.store.get_scope(scope_id)
         return float(scope.get('daily_tokens') or 0)
 
+    def _budget_error(self, message):
+        if hasattr(self.store, '_conn'):
+            from .usage_ledger import breakdown
+            start, end = day_bounds(self.settings)
+            pending = breakdown(self.store, start, end)['unconfirmed']
+            if pending['calls']:
+                message += f" 其中{pending['calls']}次消费待核实，暂保留{pending['tokens']} Token、¥{pending['cost']:.4f}；可在本机数据统计中核对。"
+        return ProviderBudgetExceededError(message)
+
     def _check_reserved_limits(self, reservation):
         # Synchronous final check: settings may have lowered a limit while the
         # HTTP client or another request was awaiting. No await follows this
@@ -249,9 +271,9 @@ class Provider:
         totals = self.store.usage_totals()
         pending = list(self._reservations.values())
         if budget['daily_tokens'] and totals['tokens'] + sum(x['input_tokens'] + x['output_tokens'] for x in pending) > budget['daily_tokens']:
-            raise ProviderBudgetExceededError('当前 Token 预算已不足以容纳在途请求，本次未发送。')
+            raise self._budget_error('当前 Token 预算已不足以容纳在途请求，本次未发送。')
         if budget['daily_cost'] and totals['cost'] + sum(x['cost'] for x in pending) > budget['daily_cost'] + 1e-12:
-            raise ProviderBudgetExceededError('当前费用预算已不足以容纳在途请求，本次未发送。')
+            raise self._budget_error('当前费用预算已不足以容纳在途请求，本次未发送。')
         current = self._reservations.get(reservation)
         if current is None:
             raise ProviderError('本次预算预留已失效。')
@@ -261,7 +283,7 @@ class Provider:
         limit = self._scope_limit(scope)
         scope_reserved = sum(x['input_tokens'] + x['output_tokens'] for x in pending if x['scope_id'] == scope)
         if limit and self.store.usage_totals(scope)['tokens'] + scope_reserved > limit:
-            raise ProviderBudgetExceededError('当前会话预算已不足以容纳在途请求，本次未发送。')
+            raise self._budget_error('当前会话预算已不足以容纳在途请求，本次未发送。')
 
     async def _reserve(self, cfg, scope_id, purpose, estimated_input, max_output, *, replace=None):
         async with self._call_lock:
@@ -280,7 +302,7 @@ class Provider:
             if budget['daily_tokens']:
                 remaining = int(budget['daily_tokens'] - totals['tokens'] - reserved_tokens - estimated_input)
                 if remaining < min_output or remaining < 0:
-                    raise ProviderBudgetExceededError('今日剩余 Token 预算不足以完成本次请求。')
+                    raise self._budget_error('今日剩余 Token 预算不足以完成本次请求。')
                 allowed_output = min(allowed_output, remaining)
             scope_limit = self._scope_limit(scope_id)
             if scope_limit:
@@ -288,7 +310,7 @@ class Provider:
                 scope_reserved = sum(x['input_tokens'] + x['output_tokens'] for x in pending if x['scope_id'] == scope_id)
                 remaining = int(scope_limit - scope_used - scope_reserved - estimated_input)
                 if remaining < min_output or remaining < 0:
-                    raise ProviderBudgetExceededError('当前会话的今日 Token 预算不足。')
+                    raise self._budget_error('当前会话的今日 Token 预算不足。')
                 allowed_output = min(allowed_output, remaining)
             input_price, output_price = float(cfg.get('input_price', 0)), float(cfg.get('output_price', 0))
             input_cost = estimated_input * input_price / 1000000
@@ -296,14 +318,15 @@ class Provider:
                 remaining_cost = budget['daily_cost'] - totals['cost'] - reserved_cost - input_cost
                 # Input cost is checked independently, including free output.
                 if remaining_cost < -1e-12:
-                    raise ProviderBudgetExceededError('剩余费用预算不足以承担本次输入。')
+                    raise self._budget_error('剩余费用预算不足以承担本次输入。')
                 if output_price > 0:
                     affordable = int(max(0, remaining_cost) * 1000000 / output_price)
                     if affordable < min_output:
-                        raise ProviderBudgetExceededError('剩余费用预算不足以完成本次请求。')
+                        raise self._budget_error('剩余费用预算不足以完成本次请求。')
                     allowed_output = min(allowed_output, affordable)
             key = replace if replace is not None else object()
-            self._reservations[key] = {'scope_id': scope_id, 'purpose': purpose, 'model': cfg['model'],
+            request_id = self._reservations.get(key, {}).get('request_id') or uuid.uuid4().hex
+            self._reservations[key] = {'request_id': request_id, 'scope_id': scope_id, 'purpose': purpose, 'model': cfg['model'],
                 'provider_id': cfg.get('id', 'default'), 'input_tokens': estimated_input, 'output_tokens': allowed_output,
                 'cost': input_cost + allowed_output * output_price / 1000000,'cost_known':bool(input_price or output_price)}
             return key, allowed_output
@@ -311,8 +334,10 @@ class Provider:
     async def _settle(self, reservation, record=None, *, uncertain=False):
         async with self._call_lock:
             pending = self._reservations.pop(reservation, None)
+            if pending is None:
+                return  # One request settles once, including repeated cleanup.
             if record is not None:
-                self.store.record_usage(record)
+                self.store.record_usage(dict(record, request_id=record.get('request_id') or pending['request_id']))
             elif uncertain and pending is not None:
                 # A read timeout/cancellation after dispatch is not proof that
                 # the provider billed nothing. Retain the reservation estimate
@@ -320,6 +345,22 @@ class Provider:
                 self.store.record_usage({**pending, 'estimated': True, 'unconfirmed': True, 'latency_ms': 0})
 
     async def complete(self, messages, *, tools=None, config=None, purpose='chat', scope_id='web:default', max_tokens=1000, before_send=None):
+        primary = dict(config) if config is not None else self.resolve(purpose, scope_id)
+        seconds = primary.get('total_timeout_seconds', 300)
+        if type(seconds) is not int or not 5 <= seconds <= 1800:
+            raise ProviderError('模型总等待时限须为5—1800秒的整数')
+        try:
+            async with asyncio.timeout(seconds):
+                return await self._complete_candidates(messages, tools=tools, config=config, purpose=purpose,
+                                                       scope_id=scope_id, max_tokens=max_tokens, before_send=before_send)
+        except TimeoutError as exc:
+            if purpose == 'chat': emit_preview('reset')
+            raise ProviderTimeoutError('本轮模型请求达到总等待时限，已停止等待；请查看用量记录确认消费状态。') from exc
+        except BaseException:
+            if purpose == 'chat': emit_preview('reset')
+            raise
+
+    async def _complete_candidates(self, messages, *, tools=None, config=None, purpose='chat', scope_id='web:default', max_tokens=1000, before_send=None):
         if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 100000:
             raise ProviderError('max_tokens 须为 1—100000 的整数')
         primary = dict(config) if config is not None else self.resolve(purpose, scope_id)
@@ -337,6 +378,7 @@ class Provider:
         last_error = None
         image_request = any(isinstance(m.get('content'), list) and any(p.get('type') == 'image_url' for p in m['content'] if isinstance(p, dict)) for m in messages)
         for index, candidate in enumerate(candidates):
+            if purpose == 'chat': emit_preview('reset')
             key = candidate.get('id', 'default')
             if image_request and not candidate.get('vision'):
                 if index == 0:
@@ -375,7 +417,9 @@ class Provider:
                         raise ProviderError('模型响应已收到，但来源、权限或模型配置已变化，未继续使用其结果。') from exc
             except ProviderError as exc:
                 state['last_error'] = str(exc)
-                if exc.retryable:
+                # A health failure and permission to repeat an uncertain
+                # generation are separate decisions.
+                if exc.retryable or isinstance(exc, (ProviderTimeoutError, ProviderConnectionError)):
                     state['failures'] += 1
                     if state['failures'] >= 2:
                         state['until'] = time.monotonic() + 30
@@ -397,10 +441,31 @@ class Provider:
         cfg = dict(config or self.settings.get()['model'])
         if not cfg.get('base_url') or not cfg.get('model'):
             raise ProviderError('请先在设置中填写模型服务地址与模型名称，并测试连接。')
+        limits = self.settings.get().get('context', {})
+        chars, images = 0, 0
+        for message in messages:
+            content = message.get('content')
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get('type') == 'image_url':
+                        images += 1
+                    elif isinstance(part, dict):
+                        chars += len(str(part.get('text', '')))
+            else:
+                chars += len(str(content or ''))
+            chars += sum(len(json.dumps(message[key], ensure_ascii=False)) for key in ('tool_calls', 'function_call') if message.get(key))
+        if tools:
+            chars += len(json.dumps(tools, ensure_ascii=False))
+        if chars > limits.get('max_input_chars', 80000) or images > limits.get('max_images', 3):
+            raise ProviderError('本次模型输入超过文字或图片总上限，请减少资料、历史或工具输出后重试。')
         url = endpoint(cfg['base_url'])
         timeout = request_timeout(cfg)
         reservation, max_tokens = await self._reserve(cfg, scope_id, purpose, estimate_tokens(messages, tools), max_tokens)
         payload = {'model': cfg['model'], 'messages': messages, 'temperature': cfg.get('temperature', 0.7), 'max_tokens': max_tokens}
+        stream_mode = cfg.get('stream_mode', 'off')
+        if stream_mode != 'off':
+            payload['stream'] = True
+            payload['stream_options'] = {'include_usage': True}
         if tools:
             payload['tools'] = tools
             payload['tool_choice'] = 'auto'
@@ -408,34 +473,70 @@ class Provider:
         if cfg.get('api_key'):
             headers['Authorization'] = 'Bearer ' + cfg['api_key']
         started = time.monotonic()
-        record, dispatched = None, False
+        record, dispatched, ttft_ms = None, False, None
+        previewed = False
+        def preview(kind, text):
+            nonlocal previewed
+            try:
+                self._check_send(before_send)
+            except ProviderError as exc:
+                raise ProviderError('模型响应已收到，但来源、权限或模型配置已变化，未继续使用其结果。') from exc
+            if purpose == 'chat':
+                previewed = True
+                emit_preview(kind, text)
+        connect_failures = transient_failures = 0
+        # Never repeat a tool continuation or an executing computer task after
+        # an unknown result. Initial text generation can opt into extra cost.
+        uncertain_fallback = bool(cfg.get('timeout_fallback', False)) and purpose in ('chat', 'planner', 'summary') and not any(
+            message.get('role') == 'tool' or message.get('tool_calls') for message in messages)
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                 response = None
-                for attempt in range(2):
+                for attempt in range(5):
                     self._check_reserved_limits(reservation)
                     self._check_send(before_send)
                     try:
                         dispatched = True
-                        response = await client.post(url, json=payload, headers=headers)
+                        if payload.get('stream'):
+                            response, ttft_ms = await receive_chat(client, url, payload, headers,
+                                first_token_seconds=cfg.get('first_token_timeout_seconds', 90), check=lambda: self._check_send(before_send),
+                                on_event=preview if purpose == 'chat' and preview_active() else None)
+                        else:
+                            response = await client.post(url, json=payload, headers=headers)
                     except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                         dispatched = False
-                        if attempt == 0:
+                        connect_failures += 1
+                        if connect_failures < 2:
                             await asyncio.sleep(.4)
                             continue
                         if isinstance(exc, httpx.ConnectTimeout):
                             raise ProviderTimeoutError('连接模型服务超时，请检查地址、网络或本地模型是否启动。', retryable=True) from exc
                         raise ProviderConnectionError('无法连接模型服务，请检查地址、网络或本地模型是否启动。', retryable=True) from exc
                     except httpx.TimeoutException as exc:
-                        raise ProviderTimeoutError('模型响应超时，本次消费无法确认，已保留预算估算，请稍后重试。') from exc
+                        raise ProviderTimeoutError('模型响应超时，本次消费无法确认，已保留预算估算，请稍后重试。', retryable=uncertain_fallback) from exc
                     except httpx.HTTPError as exc:
                         raise ProviderConnectionError('模型连接中断，本次消费无法确认，已保留预算估算。') from exc
+                    except ModelStreamError as exc:
+                        raise ProviderError(str(exc)) from exc
                     if response.status_code >= 300:
                         dispatched = False
-                    if response.status_code in (429, 502, 503) and attempt == 0:
+                    if response.status_code in (429, 502, 503) and transient_failures == 0:
+                        transient_failures += 1
                         await asyncio.sleep(.5)
                         continue
-                    if response.status_code == 400 and tools and attempt == 0:
+                    if response.status_code == 400 and payload.get('stream'):
+                        # A 400 explicitly rejected this request. Capability
+                        # negotiation must never repeat an accepted generation.
+                        error_text = response.text[:4000].casefold()
+                        if 'stream_options' in error_text and 'stream_options' in payload:
+                            payload.pop('stream_options')
+                            continue
+                        if stream_mode == 'auto' and 'stream' in error_text:
+                            payload.pop('stream', None)
+                            payload.pop('stream_options', None)
+                            self.store.add_event('model', '模型不支持流式参数，本次改用普通响应')
+                            continue
+                    if response.status_code == 400 and payload.get('tools'):
                         payload.pop('tools', None)
                         payload.pop('tool_choice', None)
                         _, payload['max_tokens'] = await self._reserve(cfg, scope_id, purpose,
@@ -466,6 +567,7 @@ class Provider:
             record = {'scope_id': scope_id, 'model': cfg['model'], 'provider_id': cfg.get('id', 'default'), 'purpose': purpose,
                       'input_tokens': input_tokens, 'output_tokens': output_tokens, 'cost': cost,
                       'cost_known':bool(cfg.get('input_price') or cfg.get('output_price')),
+                      'request_id': self._reservations.get(reservation, {}).get('request_id'), 'ttft_ms': ttft_ms,
                       'estimated': 'prompt_tokens' not in raw_usage or 'completion_tokens' not in raw_usage,
                       'latency_ms': round((time.monotonic() - started) * 1000)}
             if message.get('tool_calls') and not payload.get('tools'):
@@ -473,6 +575,9 @@ class Provider:
             content = message.get('content') or ''
             if isinstance(content, list):
                 content = '\n'.join(str(x.get('text', '')) for x in content if isinstance(x, dict))
+            if purpose == 'chat' and preview_active():
+                if message.get('tool_calls'): preview('reset', '')
+                elif not previewed and content: preview('delta', str(content))
             return {'content': str(content), 'tool_calls': message.get('tool_calls') or [], 'message': message, 'usage': record}
         finally:
             await asyncio.shield(self._settle(reservation, record, uncertain=dispatched and record is None))
@@ -498,7 +603,7 @@ class Provider:
         except httpx.HTTPError as exc:
             raise ProviderError('无法读取模型列表，仍可手动填写模型名。') from exc
 
-    async def embed(self, texts, *, scope_id='web:default', before_send=None, config=None):
+    async def embed(self, texts, *, scope_id='web:default', before_send=None, config=None, background=False):
         """Embeddings share atomic budget reservations with chat requests."""
         if not isinstance(texts, list) or not 1 <= len(texts) <= 32 or any(not isinstance(x, str) or not x.strip() or len(x) > 6000 for x in texts) or sum(map(len, texts)) > 48000:
             raise ProviderError('向量请求须为 1—32 个非空片段，每段最多 6000 字、合计最多 48000 字')
@@ -506,7 +611,7 @@ class Provider:
         testing = config is not None
         cfg = dict(config) if testing else resolve_model(current_config, 'embedding')
         memory = current_config.get('memory', {})
-        async with self._provider_slot(cfg):
+        async with self._provider_slot(cfg, 'embedding_index' if background else 'embedding'):
             if (not testing and not memory.get('semantic_enabled')) or not cfg.get('model') or not cfg.get('base_url') or not cfg.get('enabled', True):
                 raise ProviderError('语义检索未启用或未填写 Embedding 模型')
             if cfg.get('model_type') == 'chat':
@@ -525,7 +630,7 @@ class Provider:
             started = time.monotonic()
             record, dispatched = None, False
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(cfg.get('timeout_seconds', 90), connect=10), follow_redirects=False) as client:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(cfg.get('timeout_seconds', 90), connect=min(10, cfg.get('timeout_seconds', 90))), follow_redirects=False) as client:
                     self._check_reserved_limits(reservation)
                     self._check_send(guard)
                     dispatched = True

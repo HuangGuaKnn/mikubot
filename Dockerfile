@@ -12,4 +12,4 @@ USER 10001:10001
 VOLUME /data
 EXPOSE 8765
 ENTRYPOINT ["python", "-m", "mikubot"]
-CMD ["--no-browser", "--no-tray", "--host", "0.0.0.0", "--port", "8765"]
+CMD ["--no-browser", "--no-tray", "--host", "0.0.0.0", "--port", "8765", "--strict-port"]

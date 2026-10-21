@@ -1,12 +1,12 @@
-# mikubot 0.1.3 使用指南
+# mikubot 0.1.4 使用指南
 
-当前版本为0.1.3，提供安装版、便携版和源码包。[本地改进记录](https://github.com/iownmmiku/mikubot/blob/v0.1.3/docs/LOCAL_CHANGES.md)列出新实现与验收范围。
+本页描述mikubot 0.1.4，整合回复内容控制、大量记忆检索优化、网页增量回复、资料管理、提醒时区与资源监控。本版说明见[更新日志](https://github.com/iownmmiku/mikubot/blob/v0.1.4/RELEASE_NOTES.md)和[测试报告](https://github.com/iownmmiku/mikubot/blob/v0.1.4/TEST_REPORT.md)；下载是否可用以GitHub已公开发行资产为准。
 
 mikubot 是本机运行的聊天机器人和任务助手。默认人格为初音未来，可以在管理台聊天，也可以接入 NapCat、SnowLuma 或 QQ 官方机器人。电脑任务由管理员发起；普通聊天用户不会因能聊天而获得管理员权限。
 
 第一次使用的最短路径：下载并打开软件 → 设置登录密码 → 快速入门中添加供应商、获取并选择聊天模型 → 打开“聊天”发消息。默认名称可以直接沿用，QQ 和电脑能力可以稍后开启。
 
-在 [GitHub Releases](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.3) 的 Assets 中下载：`mikubot-0.1.3-Windows-Setup.exe` 是推荐安装版；`mikubot-0.1.3-Windows-x64.zip` 是完整解压后运行的便携版；`mikubot-0.1.3-source.zip` 需要 Python 3.11–3.13（推荐3.12）。安装版与便携版无需 Python 或 Node，也不包含模型密钥、QQ 客户端和连接器。
+在 [GitHub Releases 0.1.4](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.4) 的 Assets 中下载：`mikubot-0.1.4-Windows-Setup.exe` 是推荐安装版；`mikubot-0.1.4-Windows-x64.zip` 是完整解压后运行的便携版；`mikubot-0.1.4-source.zip` 需要 Python 3.11–3.13（推荐3.12）。安装版与便携版无需 Python 或 Node，也不包含模型密钥、QQ 客户端和连接器。
 
 ## 集中的配置入口
 
@@ -38,7 +38,7 @@ Windows 安装版和便携版默认打开独立桌面窗口，不必另外打开
 
 远程登录能访问聊天、设置与管理员功能。普通 HTTP 不加密密码和会话传输；仅在可信网络使用，跨不可信网络请配置 HTTPS 反向代理或加密隧道。不要把端口直接暴露到公网。远程页面不能抢先创建密码；未设密时只提示回到运行电脑完成。
 
-使用自己的 HTTPS 域名时，可直接在网络设置填写；也可在实际 `settings.json` 的 `webui` 段设置 `allowed_hosts`（例如 `["bot.example.com"]`）和 `public_url`（例如 `"https://bot.example.com"`），同时启用远程入口。代理需保留该域名的 Host，不能重写成本机地址；外部不转发 `/api/auth/bootstrap`、`/api/auth/setup`、`/api/session`。初始化链接与本机令牌不用于远程登录。完整配置和 TLS、防火墙要求见[源码部署指南](https://github.com/iownmmiku/mikubot/blob/v0.1.3/docs/SOURCE_DEPLOY.md#使用-https-反向代理)。
+使用自己的 HTTPS 域名时，可直接在网络设置填写；也可在实际 `settings.json` 的 `webui` 段设置 `allowed_hosts`（例如 `["bot.example.com"]`）和 `public_url`（例如 `"https://bot.example.com"`），同时启用远程入口。代理需保留该域名的 Host，不能重写成本机地址；外部不转发 `/api/auth/bootstrap`、`/api/auth/setup`、`/api/session`。初始化链接与本机令牌不用于远程登录。完整部署步骤见[源码部署指南](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/SOURCE_DEPLOY.md#使用-https-反向代理)。
 
 “退出登录”只退出当前登录，不停止机器人。修改密码会让其他旧登录会话失效。电脑能力需单独开启，默认采用自动执行；本机模式下，管理员在允许会话中的 MCP 调用也可自动执行。Docker 隔离模式默认禁用沙箱外 MCP；确有需要时在电脑任务高级设置开启“允许沙箱外 MCP 工具”，其执行仍不在容器内。关闭电脑能力或切换为逐次审批模式后，MCP 调用需要批准。
 
@@ -65,7 +65,7 @@ Windows 安装版和便携版默认打开独立桌面窗口，不必另外打开
 
 ## 1. 先完成一次聊天
 
-安装版双击 mikubot 快捷方式，便携版完整解压后运行 `mikubot.exe`。程序打开桌面主窗口并在 Windows 托盘运行。托盘“在浏览器打开”或 `mikubot.exe --browser` 可使用浏览器；不需要同时打开两个窗口。源码启动见 [源码部署指南](https://github.com/iownmmiku/mikubot/blob/v0.1.3/docs/SOURCE_DEPLOY.md)。
+安装版双击 mikubot 快捷方式，便携版完整解压后运行 `mikubot.exe`。程序打开桌面主窗口并在 Windows 托盘运行。托盘“在浏览器打开”或 `mikubot.exe --browser` 可使用浏览器；不需要同时打开两个窗口。源码启动见[源码部署指南](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/SOURCE_DEPLOY.md)。
 
 桌面窗口需要 Microsoft Edge WebView2 运行时。缺失或启动失败时自动改用默认浏览器继续，并尝试发送不阻塞操作的托盘通知；系统通知不可用时仍继续运行，切换原因可在运行日志查看。下次启动仍优先桌面窗口。有托盘时关窗隐藏到后台，托盘可重新打开；`--no-tray` 模式关窗会退出。`--no-browser` 保留纯后台启动方式。
 
@@ -273,13 +273,13 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1 -Stop
 
 只准备环境使用 `-SetupOnly`；依赖缺失时使用 `-Reinstall -SetupOnly`。停止可用 `powershell -ExecutionPolicy Bypass -File .\scripts\setup-source.ps1 -Stop`，也可从管理台或托盘退出。
 
-完整迁移、手动部署和实验性 Linux 路径见[源码部署指南](https://github.com/iownmmiku/mikubot/blob/v0.1.3/docs/SOURCE_DEPLOY.md)。Linux无头核心已通过GitHub CI，真实QQ与长期部署仍需在目标环境验收；默认只绑定回环地址，远程访问需要密码与受保护网络。源码 ZIP 不包含用户数据、已登录 QQ 或任何可用密钥。
+迁移、手动部署和实验性Linux路径见[源码部署指南](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/SOURCE_DEPLOY.md)。本轮Windows源码测试不代表Linux或容器容量验收；CI结果以本版实际工作流记录为准，真实QQ与长期部署仍需目标环境验收。默认只绑定回环地址，远程访问需要密码与受保护网络。源码ZIP不包含用户数据、已登录QQ或任何可用密钥。
 
 ## 11. 调度与外部环境验收
 
 设置中的请求调度可调整每模型并发、前台/后台排队容量与每会话消息队列。默认每模型并发1、模型排队32、后台排队16、会话排队8；队列满时明确提示，前台优先。SQLite 使用 WAL 与索引读取，仍仅允许单实例写同一数据目录，不支持多节点共享此目录。
 
-源码提供真实本地 TCP 故障回归与人工发消息的真实环境验收入口。不要把替身协议通过视为真实QQ账号、风控或模型质量已经验收。运行方法见[源码部署指南](https://github.com/iownmmiku/mikubot/blob/v0.1.3/docs/SOURCE_DEPLOY.md)。
+源码提供真实本地TCP故障回归与人工发消息的真实环境验收入口。不要把替身协议通过视为真实QQ账号、风控或模型质量已经验收。运行方法见[源码部署指南](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/SOURCE_DEPLOY.md)。
 
 ## 选择GitHub版本与更新
 
@@ -287,18 +287,18 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1 -Stop
 
 0.1.3中，Windows安装版可点击“一键更新到所选版本”：下载校验后退出、静默安装并重新打开，沿用原数据目录，不需再操作安装窗口。也保留“退出并启动安装”的手动窗口方式。先完成或停止后台任务，并保存完整数据副本。远程页面不允许启动安装。
 
-源码和便携版请将下载包解压到新目录，按原部署方式继续使用数据目录；源码不会自动git pull或覆盖未提交改动。历史版只下载，不直接覆盖降级。旧0.1.0安装包没有更新入口，需先手动安装一次0.1.3。当前GitHub未发布的版本不会显示为可下载。
+源码和便携版请将下载包解压到新目录，按原部署方式继续使用数据目录；源码不会自动git pull或覆盖未提交改动。历史版只下载，不直接覆盖降级。旧0.1.0安装包没有更新入口，需先手动安装一次0.1.4；GitHub列表只显示实际已公开的版本。
 
-详细步骤和限制见[更新指南](https://github.com/iownmmiku/mikubot/blob/v0.1.3/docs/UPDATES.md)。
+更新步骤和限制见[更新指南](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/UPDATES.md)。
 
 
 ## 本地插件与数据统计（0.1.3）
 
 “管理功能 → 插件”可新建、编辑、启停、删除和运行 Python 插件。先连接支持工具调用的模型并开启电脑能力，在本地聊天说“帮我创建一个……插件”可保存草稿；检查代码、启用后再明确要求运行，或在插件页输入 JSON。代码定义同步 `run(input)`，返回 JSON 结果。每次修改重新停用，不自动装依赖。QQ用户不能创建或运行这些插件。任务遵循电脑能力的运行环境、审批与停止规则；自动模式不增加逐项批准，源码和产物另行备份。
 
-“数据统计”显示1/3/7天消息、平台分布、模型调用与Token趋势，以及进程CPU、内存和运行时间。首字延迟未采集，价格未知会标明；估算费用不等于服务商账单。没有模型用量记录时不会生成虚构曲线数据。
+“数据统计”显示1/3/7天消息、平台分布、模型调用与Token趋势，以及进程CPU、内存和运行时间。0.1.4记录流式首个有效内容延迟，没有真实样本时不显示虚构值；价格未知会标明，估算费用不等于服务商账单。
 
-“系统设置 → 时间与日配额”可填写 IANA 时区，例如 `Asia/Shanghai`、`UTC` 或 `America/New_York`。默认UTC+8，日预算、Planner、表情包配额和统计同步使用该时区；原自然语言提醒仍按UTC+8解析。
+“系统设置 → 时间与日配额”可填写 IANA 时区，例如 `Asia/Shanghai`、`UTC` 或 `America/New_York`。默认Asia/Shanghai（UTC+8），日预算、Planner、表情包配额、统计及自然语言提醒使用该时区；单个提醒可保存独立时区，重复提醒按当地日历处理夏令时。
 
 表情包页显示“识图+发送前选图”的统一模型调用配额，默认每天60次，另保留每日30次识图上限；失败也占一次尝试，0停止对应调用。页面同时显示两类次数、Token和下次重置时区。350/120只是两类模型请求的最大输出Token设置，实际还含输入及服务商收费，不能把次数当作固定账单。
 
@@ -308,4 +308,22 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1 -Stop
 
 在“机器人配置 → 回复与记忆”选择默认的“模型自然分段”：模型在生成回复时用空行决定另发一条，单换行只是同一条内排版。一条可以几个字，也可以包含好几句话，不强制发满固定段数；模型没有主动分段时整条发送，不按字数补切。本地聊天也按生成时已保存的边界显示。
 
-完整代码围栏内的空行与完整 JSON 保持一条。仍保留连续条数防刷屏和平台长度保护；超过条数上限时合并尾部，超过平台长度时进行必要传输切分，完整代码/链接无法容纳时停止并保留原文。每条发送继续检查权限、来源和回执，失败停止后续条，不自动重发。旧版目标段长只在主动选择“旧版按长度分段”时生效。
+完整代码围栏内的空行与完整JSON保持一条。0.1.4在超出连续条数上限时均衡合并相邻模型段落，不把长尾全部堆到最后，也不按句子补切单个模型段落。仍保留平台长度保护；无法完整容纳受保护内容时停止并保留原文。每条发送继续检查权限、来源和回执，失败停止后续条，不自动重发。旧版目标段长只在主动选择“旧版按长度分段”时生效。
+
+## 0.1.4 资料、检索与增量回复
+
+本地聊天会逐步显示模型回复草稿，完成后以校验后的最终结果替换；工具调用或取消时可能清空草稿。不要把尚未完成的预览当成已经执行的操作回执。
+
+资料上传可选择本次参考、长期资料或人格蒸馏；资料管理支持预览、撤销与清理。大量记忆首次会分批建立词项索引，缺失向量默认后台补建，仍会产生嵌入调用费用。[附件说明](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/ATTACHMENTS.md)与[检索说明](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/MEMORY_RETRIEVAL.md)介绍用途、等待预算和队列边界。
+
+“设置与连接 → 资源与响应速度”提供低内存预设和有界并发参数；“数据统计”展示后台索引与当前可读取的容器资源。已收到的Token、估算和待核实消费分开显示，本机可记录人工核对，尚不支持供应商自动逐笔对账。[模型响应说明](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/MODEL_TRANSPORT.md)介绍流式、超时与备用调用设置。
+
+提醒解析、显示、提示词与静默窗口使用配置的IANA时区，任务页可单独调整提醒时区。重复提醒按当地日历跨夏令时，已有提醒不因修改全局时区而静默换钟点，详情见[提醒时区](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/REMINDER_TIMEZONES.md)。
+
+### 回复长度与括号内容
+
+实际入口为 **机器人配置 → 回复与记忆 → 回复内容与消息分段**。整轮回复字符上限`output.reply_max_chars`与单条消息字符上限`output.message_max_chars`默认都为0，表示不限制；“删除括号及其中内容”对应`output.remove_parentheses`，默认关闭。会话不单独设置时继承全局，内容规则独立于分段开关。
+
+中文、英文、标点和空格按字符计数，不计换行。优先让AI生成时遵守；超出时缩短展示，可展开原始回复。代码、链接和JSON不截成残片，无法放下时提示查看原文。删除中文/英文圆括号及其内容时保护这些片段，未匹配括号保留。规则只作用AI正文，系统指令、工具执行回执和确认凭据保留。
+
+模型消息超过条数上限时只均衡合并已生成边界，不按句子切开单个超长段落。内容限制或括号处理开启时，增量预览按安全完整段出现，末段等待最终结果，详情见[输出说明](https://github.com/iownmmiku/mikubot/blob/v0.1.4/docs/MODEL_OUTPUT.md)。

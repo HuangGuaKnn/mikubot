@@ -77,6 +77,11 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
     app.state.store, app.state.settings, app.state.chat = store, settings, chat
     app.state.provider, app.state.bridge, app.state.scheduler = provider, router, scheduler
     app.state.onebot, app.state.official = onebot, official
+    from .work_limits import WorkLimiter, WorkBusy
+    inbound = WorkLimiter(settings, 'request', 8, 16)
+    parsing = WorkLimiter(settings, 'parsing', 1, 4)
+    app.state.parsing_slot = parsing.slot
+    app.state.resource_limits = lambda: {'requests': inbound.status(), 'parsing': parsing.status()}
     from .statistics import install_statistics
     install_statistics(app,store,settings,onebot,official)
     app.state.shutdown = None
@@ -111,6 +116,19 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
 
     @app.middleware('http')
     async def secure_local(request, call_next):
+        # Authentication/stop endpoints and long-lived event streams must
+        # remain available while regular API work is saturated.
+        bounded = request.url.path.startswith('/api/') and not request.url.path.startswith('/api/auth/') and request.url.path not in (
+            '/api/session', '/api/shutdown') and not request.url.path.endswith('/stream')
+        try:
+            if bounded and auth_http.authenticated(request):
+                async with inbound.slot():
+                    return await secure_local_inner(request, call_next)
+            return await secure_local_inner(request, call_next)
+        except WorkBusy as exc:
+            return JSONResponse({'detail': str(exc), 'code': 'resource_busy'}, status_code=503)
+
+    async def secure_local_inner(request, call_next):
         nonlocal active_requests, maintenance
         if not auth_http.allowed_host(request):
             return JSONResponse({'detail': '访问主机未获允许；远程域名请在本机配置'}, status_code=403)
@@ -123,7 +141,7 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
             size = int(request.headers.get('content-length', '0') or 0)
         except ValueError:
             return JSONResponse({'detail': '请求长度格式错误'}, status_code=400)
-        maximum = 8192 if request.url.path.startswith('/api/auth/') or request.url.path == '/api/session' else 32 * 1024 * 1024
+        maximum = 8192 if request.url.path.startswith('/api/auth/') or request.url.path == '/api/session' else settings.get()['scheduler'].get('request_max_mb', 32) * 1024 * 1024
         if size > maximum:
             return JSONResponse({'detail': '请求内容超过大小限制'}, status_code=413)
         if request.url.path.startswith('/api/'):
@@ -182,6 +200,10 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
             result.headers['Cache-Control'] = 'no-cache, max-age=0, must-revalidate'
         return result
 
+    @app.exception_handler(WorkBusy)
+    async def resources_busy(request, exc):
+        return JSONResponse({'detail':str(exc), 'code':'resource_busy'}, status_code=503)
+
     @app.exception_handler(ValueError)
     async def bad_value(request, exc):
         return JSONResponse({'detail': str(exc)}, status_code=400)
@@ -209,10 +231,10 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         return {'name': 'mikubot', 'version': __version__, 'identity': hashlib.sha256(settings.token.encode()).hexdigest()[:16]}
 
     @app.get('/api/bootstrap')
-    async def bootstrap():
+    async def bootstrap(request: Request):
         cfg = settings.public()
         model = resolve_model(settings.get(), 'chat')
-        return {'version': __version__, 'name': 'mikubot', 'setup_required': not (model.get('base_url') and model.get('model')),
+        return {'version': __version__, 'name': 'mikubot', 'listener': auth_http.binding(request), 'setup_required': not (model.get('base_url') and model.get('model')),
                 'settings': cfg, 'stats': store.stats(), 'scopes': store.list_scopes(), 'personas': store.list_personas(), 'qq': router.status(),
         'capabilities': {'text': bool(model.get('base_url') and model.get('model')), 'vision': model.get('vision', False), 'voice': False,
                                  'memory': True, 'dictionary': True, 'reminders': True, 'embedding': bool(cfg['memory']['semantic_enabled']),
@@ -505,8 +527,7 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         chat.memory.clear_index()
         return {'ok': True}
 
-    @app.post('/api/chat')
-    async def send_chat(request: Request, payload: dict = Body(...)):
+    async def run_chat(request, payload, *, watch_disconnect=True):
         scope_id = str(payload.get('scope_id', 'web:default'))
         scope = dict(store.get_scope(scope_id),always_reply=True,plan_enabled=False)
         if not scope_id.startswith('web:'):
@@ -530,7 +551,7 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         try:
             while not task.done():
                 done, _ = await asyncio.wait({task}, timeout=.4)
-                if not done and await request.is_disconnected():
+                if not done and watch_disconnect and await request.is_disconnected():
                     chat.tool_actions.cancel_request(scope_id,'owner',generation)
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError): await task
@@ -539,7 +560,40 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         except asyncio.CancelledError:
             chat.tool_actions.cancel_request(scope_id,'owner',generation)
             task.cancel()
+            with contextlib.suppress(asyncio.CancelledError): await task
             raise
+
+    @app.post('/api/chat')
+    async def send_chat(request: Request, payload: dict = Body(...)):
+        if payload.get('stream') is not True:
+            return await run_chat(request, payload)
+        scope_id = str(payload.get('scope_id', 'web:default'))
+        if not scope_id.startswith('web:'):
+            raise ValueError('聊天试玩仅写入本地对话，请创建本地对话；不会向 QQ 群发送')
+        store.get_scope(scope_id)
+        # Reject malformed/revoked references before accepting a stream. The
+        # real lease is acquired in its producer, not by response middleware.
+        app.state.attachments.resolve(scope_id, payload.get('attachments') or [], acquire=False)
+
+        @asynccontextmanager
+        async def stream_lifecycle():
+            nonlocal active_requests
+            async with inbound.slot():
+                async with request_gate:
+                    if maintenance:
+                        raise HTTPException(503, '正在恢复备份，请稍后重试')
+                    active_requests += 1
+                try:
+                    yield
+                finally:
+                    async with request_gate:
+                        active_requests -= 1
+                        request_gate.notify_all()
+
+        from .web_chat_stream import chat_stream
+        return chat_stream(request, lambda: run_chat(request, payload, watch_disconnect=False),
+                           lease=app.state.attachments.request, lifecycle=stream_lifecycle,
+                           authenticated=lambda: auth_http.authenticated(request))
 
     def memory_payload(payload):
         data = dict(payload)
@@ -708,6 +762,8 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
     async def tasks(scope_id: str | None = None, status: str | None = None): return store.list_tasks(scope_id=scope_id, status=status)
 
     def task_payload(payload):
+        from .timeparse import calendar_fields, local_wall
+        from .timezones import config_zone
         data = dict(payload)
         data.setdefault('scope_id', 'web:default')
         data.setdefault('user_id', 'owner')
@@ -715,11 +771,16 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         if data.get('due_at'):
             try:
                 due = datetime.fromisoformat(str(data['due_at']).replace('Z', '+00:00'))
-                if not due.tzinfo or due <= datetime.now(timezone.utc):
-                    raise ValueError()
-                data['due_at'] = due.astimezone(timezone.utc).isoformat()
-            except ValueError as exc:
-                raise ValueError('提醒需要未来时间并包含时区') from exc
+            except (TypeError, ValueError) as exc:
+                raise ValueError('提醒时间格式无效') from exc
+            if due.tzinfo is None:
+                if not data.get('timezone'):
+                    raise ValueError('提醒需要未来时间并包含时区；本地钟点须同时提供 IANA timezone')
+                due = local_wall(due, config_zone({'time': {'timezone': data['timezone']}}))
+            if due <= datetime.now(timezone.utc):
+                raise ValueError('提醒需要未来时间并包含时区')
+            data['due_at'] = due.astimezone(timezone.utc).isoformat()
+            data.update(calendar_fields(data['due_at'], settings, timezone_name=data.get('timezone')))
         if data['kind'] == 'reminder' and not data.get('due_at'):
             raise ValueError('提醒需要日期时间')
         return data
@@ -730,8 +791,10 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
     @app.put('/api/tasks/{id}')
     async def edit_task(id: str, payload: dict = Body(...)):
         data = dict(payload)
-        if 'due_at' in data and data['due_at']:
-            data['due_at'] = task_payload(dict(store.get_task(id), **data))['due_at']
+        if ('due_at' in data and data['due_at']) or 'timezone' in data:
+            checked = task_payload(dict(store.get_task(id), **data))
+            if checked.get('due_at'):
+                data.update({key: checked[key] for key in ('due_at', 'timezone', 'wall_time', 'calendar_anchor')})
         return store.update_task(id, data)
 
     @app.post('/api/tasks/{id}/cancel')
@@ -742,10 +805,32 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         task = store.get_task(id)
         if task.get('status') not in ('failed', 'cancelled'):
             raise ValueError('仅失败或已取消的任务可以手动重试')
-        return store.update_task(id, {'status': 'pending', 'delivery_status': 'pending', 'error': '', 'due_at': datetime.now(timezone.utc).isoformat() if task.get('kind') == 'reminder' else task.get('due_at')})
+        calendar = {}
+        if task.get('due_at'):
+            from .timeparse import validate_calendar
+            snapshot = validate_calendar(dict(task), settings)
+            calendar = {key: snapshot[key] for key in ('timezone', 'wall_time', 'calendar_anchor')}
+        return store.update_task(id, {'status': 'pending', 'delivery_status': 'pending', 'error': '', 'due_at': datetime.now(timezone.utc).isoformat() if task.get('kind') == 'reminder' else task.get('due_at'), **calendar})
 
     @app.get('/api/usage')
     async def usage(): return [dict(x,cost_known=x.get('cost_known',float(x.get('cost',0))>0)) for x in store.list_usage(limit=300)]
+
+    @app.post('/api/usage/{id}/reconcile')
+    async def reconcile_usage(id: str, request: Request, payload: dict = Body(...)):
+        if not local_peer(request):
+            raise HTTPException(403, '消费对账只能在运行电脑本机进行')
+        from .usage_ledger import reconcile
+        return await asyncio.to_thread(reconcile, store, id, payload)
+
+    @app.get('/api/usage/unconfirmed')
+    async def unconfirmed_usage(offset: int = 0, limit: int = 50):
+        if offset < 0 or not 1 <= limit <= 100:
+            raise ValueError('用量分页范围无效')
+        with store._lock:
+            clause = "json_extract(data,'$.unconfirmed')=1"
+            total = store._conn.execute('SELECT COUNT(*) FROM usage WHERE ' + clause).fetchone()[0]
+            records = store._conn.execute('SELECT data FROM usage WHERE ' + clause + ' ORDER BY created_at DESC,rowid DESC LIMIT ? OFFSET ?', (limit, offset)).fetchall()
+        return {'items': [json.loads(row[0]) for row in records], 'total':total, 'offset':offset, 'limit':limit}
 
     @app.get('/api/events')
     async def events(): return store.list_events(limit=80)

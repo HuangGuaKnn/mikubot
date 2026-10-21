@@ -105,8 +105,13 @@ function renderNavigation() {
   $("#sidebar-status-text").textContent = state.settings.paused ? "已暂停自动回复" : modelReady ? "本地服务已就绪" : "等待配置模型";
   $("#sidebar-status-sub").textContent = modelReady ? (configuredModel().model || "你的数据，留在你的电脑") : "连接模型即可开始聊天";
   $("#version-label").textContent = state.boot?.version || "0.1";
-  $("#workspace-version").textContent = state.boot?.version || "0.1.3";
-  if ($("#header-version")) $("#header-version").textContent = "v" + (state.boot?.version || "0.1.3");
+  $("#workspace-version").textContent = state.boot?.version || "0.1.4";
+  if ($("#header-version")) $("#header-version").textContent = "v" + (state.boot?.version || "0.1.4");
+  const portWarning = $("#port-warning"), listener = state.boot?.listener;
+  if (portWarning) {
+    portWarning.hidden = !listener?.port_changed;
+    portWarning.textContent = listener?.port_changed ? listener.port_warning : "";
+  }
 }
 async function bootstrap(showWizard = false) {
   const boot = await api("/api/bootstrap");
@@ -216,9 +221,9 @@ async function saveModal(kind,form) {
   let endpoint, payload;
   if (kind === "memory") { endpoint = "/api/memories"; payload = {...data,importance:Number(data.importance),valid_to:data.valid_to ? new Date(data.valid_to).toISOString() : null}; }
   else if (kind === "jargon") { endpoint = "/api/jargon"; payload = data; }
-  else if (kind === "task") { endpoint = "/api/tasks"; if (data.kind === "reminder" && !data.due_at) throw new Error("请为提醒选择时间。"); if (data.repeat !== "none" && !data.due_at) throw new Error("重复任务需要设置提醒时间。"); payload = {...data,due_at:data.due_at ? new Date(data.due_at).toISOString() : null}; }
+  else if (kind === "task") { endpoint = "/api/tasks"; if (data.kind === "reminder" && !data.due_at) throw new Error("请为提醒选择时间。"); if (data.repeat !== "none" && !data.due_at) throw new Error("重复任务需要设置提醒时间。"); payload = {...data,due_at:data.due_at || null}; }
   else if (kind === "persona") { endpoint = "/api/personas"; payload = {...data,interests:splitNames(data.interests),excluded_topics:splitNames(data.excluded_topics),exploration:{}}; for (const key of ["interval_hours","daily_searches","valid_days"]) { payload.exploration[key] = data["explore_"+key] === "" ? null : Number(data["explore_"+key]); delete payload["explore_"+key]; } }
-  else if (kind === "scope") { endpoint = "/api/scopes"; payload = {...data,bot_aliases:splitNames(data.bot_aliases)}; if (!payload.id) delete payload.id; for (const key of ["cooldown_seconds","merge_window_ms","followup_seconds","daily_tokens"]) payload[key] = Number(data[key]); for (const key of ["trigger_at","trigger_reply","trigger_name","plan_enabled","proactive_reply"]) payload[key] = data[key] === "" ? null : data[key] === "true"; for (const key of ["planner_min_interval_ms","planner_daily_calls","planner_daily_tokens","planner_max_age_ms"]) payload[key] = data[key] === "" ? null : Number(data[key]); payload.output = data.output_override ? Object.fromEntries(["enabled","mode","target_chars","max_chars","platform_max_chars","interval_ms","max_parts"].map(key => [key,key === "enabled" ? data["out_"+key] : key === "mode" ? (data.out_mode || "model") : Number(data["out_"+key])])) : null; for (const key of Object.keys(payload)) if (key.startsWith("out_") || key === "output_override") delete payload[key]; }
+  else if (kind === "scope") { endpoint = "/api/scopes"; payload = {...data,bot_aliases:splitNames(data.bot_aliases)}; if (!payload.id) delete payload.id; for (const key of ["cooldown_seconds","merge_window_ms","followup_seconds","daily_tokens"]) payload[key] = Number(data[key]); for (const key of ["trigger_at","trigger_reply","trigger_name","plan_enabled","proactive_reply"]) payload[key] = data[key] === "" ? null : data[key] === "true"; for (const key of ["planner_min_interval_ms","planner_daily_calls","planner_daily_tokens","planner_max_age_ms"]) payload[key] = data[key] === "" ? null : Number(data[key]); payload.output = data.output_override ? Object.fromEntries(["enabled","mode","target_chars","max_chars","platform_max_chars","interval_ms","max_parts","reply_max_chars","message_max_chars","remove_parentheses"].map(key => [key,["enabled","remove_parentheses"].includes(key) ? !!data["out_"+key] : key === "mode" ? (data.out_mode || "model") : Number(data["out_"+key] ?? (["reply_max_chars","message_max_chars"].includes(key) ? 0 : undefined))])) : null; for (const key of Object.keys(payload)) if (key.startsWith("out_") || key === "output_override") delete payload[key]; for (const key of Object.keys(item || {})) if (key.startsWith("output_")) payload[key] = null; if (item?.settings?.output || Object.keys(item?.settings || {}).some(key => key.startsWith("output_"))) payload.settings = {output:null,...Object.fromEntries(Object.keys(item.settings).filter(key => key.startsWith("output_")).map(key => [key,null]))}; }
   else return;
   if (kind === "scope") {
     const inherited = ['persona_id','model_id','activity','trigger_at','trigger_reply','trigger_name','plan_enabled','proactive_reply','always_reply','allow_tools','allow_mcp','use_persona_knowledge'];
@@ -228,7 +233,7 @@ async function saveModal(kind,form) {
   await api(endpoint + (item ? `/${encodeURIComponent(item.id)}` : ""),{method:item ? "PUT" : "POST",body:payload});
   closeModal(); toast(item ? "修改已保存" : "已添加到这个小世界"); await bootstrap();
 }
-function modelPayload(form) { const data = getForm(form), model = {base_url:data.base_url,model:data.model,vision:data.vision}; if (data.api_key) model.api_key = data.api_key; for (const key of ["temperature","input_price","output_price","timeout_seconds"]) if (data[key] !== undefined) model[key] = Number(data[key]); return model; }
+function modelPayload(form) { const data = getForm(form), model = {base_url:data.base_url,model:data.model,vision:data.vision}; if (data.api_key) model.api_key = data.api_key; for (const key of ["temperature","input_price","output_price","timeout_seconds","first_token_timeout_seconds","total_timeout_seconds"]) if (data[key] !== undefined) model[key] = Number(data[key]); if (data.stream_mode !== undefined) model.stream_mode = data.stream_mode; if (data.timeout_fallback !== undefined) model.timeout_fallback = !!data.timeout_fallback; return model; }
 function splitIds(value) { return String(value || "").split(/[\s,，;；]+/).map(item => item.trim()).filter(Boolean); }
 function splitNames(value) { return [...new Set(String(value || "").split(/[\n\r,，;；]+/).map(item => item.trim()).filter(Boolean))]; }
 
@@ -395,7 +400,7 @@ document.addEventListener("submit",async event => {
     else if (kind === "culture-switches") { await api(`/api/scopes/${encodeURIComponent(state.scope)}`,{method:"PUT",body:getForm(form)}); toast("学习、理解与使用规则已保存"); await bootstrap(); }
     else if (kind === "expression-switches") { await api(`/api/scopes/${encodeURIComponent(state.scope)}`,{method:"PUT",body:getForm(form)}); toast("表达学习与使用规则已保存"); await bootstrap(); }
     else if (kind === "knowledge-search") { const values = getForm(form),searchedScope = state.scope; state.knowledgeQuery = values.q; state.knowledgeUser = values.user_id; const results = await api(`/api/memory/search?${query({scope_id:searchedScope,user_id:values.user_id,q:values.q})}`); state.knowledgeResults = {...results,scope_id:searchedScope}; await renderPage(); }
-    else if (["model","wizard","qq","budget","system","memory-settings","routing","context-settings","identity","output","exploration","planner"].includes(kind)) await saveSettings(kind,form);
+    else if (["model","wizard","qq","budget","system","memory-settings","routing","context-settings","identity","output","exploration","planner","resource-settings"].includes(kind)) await saveSettings(kind,form);
     else await saveModal(kind,form);
   } catch (error) { if (form.closest("dialog")) modalError(error.message); else toast(error.message,true); }
   finally { if (submit) submit.disabled = false; }

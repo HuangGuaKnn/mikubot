@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from collections import OrderedDict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from .social import ConversationFlow
@@ -17,6 +17,7 @@ from .settings import resolve_model, resolved_identity
 from .output import OutputLimitError, split_transport_output
 from .access import manager_for, private_allowed, chat_allowed
 from .qq_diagnostics import QQDiagnostics, private_scope
+from .timezones import config_zone
 
 
 def _ids(value):
@@ -29,12 +30,12 @@ def scope_value(scope, key, default=None):
     return scope.get(key, (scope.get('settings') or {}).get(key, default))
 
 
-def is_quiet(scope, now=None):
-    """Quiet windows use Hong Kong local time; explicit mentions remain actionable."""
+def is_quiet(scope, now=None, *, settings=None):
+    """Quiet windows follow the configured calendar, defaulting to UTC+8."""
     start, end = scope_value(scope, 'quiet_start', ''), scope_value(scope, 'quiet_end', '')
     if not start or not end or not re.fullmatch(r'\d{2}:\d{2}', start + '') or not re.fullmatch(r'\d{2}:\d{2}', end + ''):
         return False
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone(timedelta(hours=8))).strftime('%H:%M')
+    current = (now or datetime.now(timezone.utc)).astimezone(config_zone(settings)).strftime('%H:%M')
     return start <= current < end if start < end else current >= start or current < end
 
 
