@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 import httpx
 from .settings import resolve_model
 from .timezones import config_zone, day_bounds
-from .model_stream import receive_chat, ModelStreamError
+from .model_stream import receive_chat, ModelStreamError, IncompleteModelStreamError
 from .chat_preview import emit_preview, preview_active
 
 
@@ -23,6 +23,10 @@ class ProviderError(ValueError):
     def __init__(self, message, *, retryable=False):
         super().__init__(message)
         self.retryable = retryable
+
+
+class ProviderStreamError(ProviderError):
+    """Incomplete transport result; callers may retry side-effect-free analysis."""
 
 
 class ProviderBudgetExceededError(ProviderError):
@@ -171,7 +175,7 @@ class Provider:
                               'global_queued': sum(self._global_gate.counts().values()),
                               'background_queued': sum(self._background_gate.counts().values()),
                               'foreground_queued': sum(x.counts()['foreground'] for x in self._provider_locks.values())},
-                'routes': {key: {**{k: v for k, v in self.resolve(key).items() if k in ('id', 'name', 'model', 'enabled', 'vision', 'tools')}, 'provider_id': self.resolve(key).get('id', 'default')} for key in ('chat', 'planner', 'memory', 'gate', 'summary', 'embedding')},
+                'routes': {key: {**{k: v for k, v in self.resolve(key).items() if k in ('id', 'name', 'model', 'enabled', 'vision', 'tools')}, 'provider_id': self.resolve(key).get('id', 'default')} for key in ('chat', 'planner', 'memory', 'gate', 'summary', 'distillation', 'embedding')},
                 'reserved': {'requests': len(self._reservations), 'tokens': sum(x['input_tokens'] + x['output_tokens'] for x in self._reservations.values()),
                              'cost': sum(x['cost'] for x in self._reservations.values())},
                 'providers': [{**{k: item.get(k) for k in ('id', 'name', 'model', 'enabled')},
@@ -516,6 +520,12 @@ class Provider:
                         raise ProviderTimeoutError('模型响应超时，本次消费无法确认，已保留预算估算，请稍后重试。', retryable=uncertain_fallback) from exc
                     except httpx.HTTPError as exc:
                         raise ProviderConnectionError('模型连接中断，本次消费无法确认，已保留预算估算。') from exc
+                    except IncompleteModelStreamError as exc:
+                        self.store.add_event('model_stream_incomplete',
+                            '模型流缺少完整结束标记；本次消费待确认，未采用残缺结果',
+                            scope_id=scope_id, purpose=purpose, provider_id=cfg.get('id', 'default'),
+                            **exc.diagnostics)
+                        raise ProviderStreamError(str(exc), retryable=uncertain_fallback) from exc
                     except ModelStreamError as exc:
                         raise ProviderError(str(exc)) from exc
                     if response.status_code >= 300:

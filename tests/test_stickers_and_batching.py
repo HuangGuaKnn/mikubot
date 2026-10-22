@@ -15,6 +15,7 @@ from mikubot.db import Store
 from mikubot.settings import Settings
 from mikubot.social import SocialEngine, ConversationFlow
 from mikubot.stickers import StickerLibrary, download_image, MAX_IMAGE
+from mikubot.provider import ProviderStreamError
 
 
 def png():
@@ -80,6 +81,23 @@ def test_collect_preserves_local_image_and_deduplicates(library):
     stored,raw=engine.payload(item['id'],'qq:group:1',1)
     assert raw==download_image(png())[0] and stored['mime']=='image/png'
     assert 'image' not in item and 'data:' not in json.dumps(item)
+
+
+@pytest.mark.parametrize('limit,success,attempts', [(3,True,2),(1,False,1)])
+def test_sticker_incomplete_stream_retry_consumes_each_daily_call(library, monkeypatch, limit, success, attempts):
+    store, cfg, model, engine = library
+    cfg.update({'stickers':{'daily_recognitions':limit,'daily_model_calls':limit}})
+    complete = model.complete
+    seen = []
+    async def flaky(messages, **kwargs):
+        seen.append(messages)
+        if len(seen) == 1: raise ProviderStreamError('流中断')
+        return await complete(messages, **kwargs)
+    monkeypatch.setattr(model,'complete',flaky)
+    asyncio.run(collect(store,engine))
+    assert len(seen) == attempts and engine.page()['total'] == int(success)
+    quota = engine.quota_status()
+    assert quota['vision'] == attempts and quota['total'] == attempts
 
 
 @pytest.mark.parametrize('clear,confidence',[(False,.99),(True,.3)])

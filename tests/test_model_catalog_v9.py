@@ -44,6 +44,23 @@ def add(catalog, source_id, names=('alpha', 'beta')):
     return catalog.add_models({'provider_id': source_id, 'models': list(names)})
 
 
+def test_distillation_route_inherits_chat_and_can_be_configured_independently(catalog):
+    manager, _ = catalog
+    saved_source = source(manager)
+    models = add(manager, saved_source['id'])['added']
+    chat, analysis = models[0]['id'], models[1]['id']
+    manager.update_routing({'chat':chat})
+    assert resolve_model(manager.settings.get(), 'distillation')['id'] == chat
+    manager.update_routing({'distillation':analysis})
+    assert resolve_model(manager.settings.get(), 'distillation')['id'] == analysis
+    assert resolve_model(manager.settings.get(), 'chat')['id'] == chat
+    assert manager.snapshot()['routes']['distillation']['model_id'] == analysis
+    with pytest.raises(ValueError, match='用途'): manager.update_routing({'unknown':'x'})
+    with pytest.raises(ValueError): manager.delete_model(analysis)
+    manager.update_routing({'distillation':''})
+    assert resolve_model(manager.settings.get(), 'distillation')['id'] == chat
+
+
 def test_viewing_legacy_models_preserves_secrets_ids_and_routes(catalog):
     manager, _ = catalog
     manager.settings.update({'model': {'base_url': 'https://legacy.example/v1', 'model': 'old-default', 'api_key': SECRET},

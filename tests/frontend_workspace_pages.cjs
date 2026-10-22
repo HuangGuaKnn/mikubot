@@ -49,6 +49,10 @@ async function main(){
   await ui.handleAction("route-chat-model",{dataset:{id:"m1"}});assert.equal(calls.at(-1)[0],"/api/model-catalog/routing");assert.deepEqual(plain(calls.at(-1)[1].body),{chat:"m1"});
   await ui.handleAction("route-chat-model",{dataset:{id:"default"}});assert.deepEqual(plain(calls.at(-1)[1].body),{chat:""},"the original default model is represented by an empty global route");
   await ui.handleSubmit("catalog-routing",{values:{chat:"default",memory:"m1"}});assert.deepEqual(plain(calls.at(-1)[1].body),{chat:"",memory:"m1"},"task routing normalizes the original default model");
+  sandbox.routeNames.distillation="人格生成与蒸馏";
+  const analysisRoutes=await ui.renderModels();assert.match(analysisRoutes,/name="distillation"/);assert.match(analysisRoutes,/继承日常对话模型/);
+  await ui.handleSubmit("catalog-routing",{values:{chat:"default",memory:"",distillation:"m1"}});
+  assert.deepEqual(plain(calls.at(-1)[1].body),{chat:"",memory:"",distillation:"m1"},"persona generation saves its own model route");
   const qq=ui.qqIngress({message_events_received:0,heartbeat_events_received:3,diagnostic:"只有心跳，尚未收到消息",last_message_result:{reason:"<img>"}});assert.match(qq,/只有心跳/);assert.match(qq,/心跳 3/);
   assert.ok(!ui.qqIngress({message_events_received:1,diagnostic:"<script>bad</script>"}).includes("<script>"));
   const rejected=ui.qqIngress({message_events_received:1,last_message_result:{code:"private_not_allowed",stage:"blocked",user_id:"123456",scope_id:"qq:private:123456"}});

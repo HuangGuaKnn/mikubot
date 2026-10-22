@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from mikubot.api import create_app
 from mikubot.db import Store
 from mikubot.model_stream import ModelStreamError, receive_chat
-from mikubot.provider import Provider, ProviderError, ProviderTimeoutError
+from mikubot.provider import Provider, ProviderError, ProviderTimeoutError, ProviderStreamError
 from mikubot.settings import Settings, PROVIDER_DEFAULTS
 from mikubot.usage_ledger import reconcile, breakdown
 
@@ -74,6 +74,69 @@ def test_partial_stream_is_not_returned_or_treated_as_free(setup_provider):
     with pytest.raises(ProviderError,match='中断'):
         asyncio.run(provider.complete([{'role':'user','content':'hi'}]))
     assert store.list_usage()[0]['unconfirmed'] and not provider._reservations
+
+
+def test_done_sentinel_completes_text_without_finish_reason(setup_provider):
+    provider, _, store, transport = setup_provider
+    raw = sse({'content':'完整的纯文本。'}) + b'data: [DONE]\n\n'
+    transport(lambda request:httpx.Response(200, headers={'content-type':'text/event-stream'}, stream=Chunks([raw])))
+    assert asyncio.run(provider.complete([{'role':'user','content':'hi'}]))['content'] == '完整的纯文本。'
+    assert len(store.list_usage()) == 1 and not store.list_usage()[0].get('unconfirmed')
+
+
+def test_real_provider_analysis_retry_preserves_two_separate_usage_records(setup_provider, tmp_path):
+    from mikubot.distillation import DistillationService
+    provider, _, store, transport = setup_provider
+    seen = []
+    def handler(request):
+        seen.append(request)
+        raw = sse({'content':'partial'}) if len(seen) == 1 else sse({'content':'完整的人格草稿'}, 'stop')
+        return httpx.Response(200, headers={'content-type':'text/event-stream'}, stream=Chunks([raw]))
+    transport(handler)
+    result = asyncio.run(DistillationService(provider, tmp_path).generate({'mode':'generate','description':'温柔的读书伙伴'}))
+    records = store.list_usage()
+    assert len(seen) == 2 and len(records) == 2
+    assert sum(bool(record.get('unconfirmed')) for record in records) == 1
+    assert len({record['request_id'] for record in records}) == 2
+    assert not provider._reservations and result['personality'] == '完整的人格草稿'
+    assert result['usage']['calls'] == 2 and result['usage']['estimated']
+
+
+def test_done_sentinel_does_not_authorize_unfinished_tools(setup_provider):
+    provider, _, store, transport = setup_provider
+    raw = sse({'tool_calls':[{'index':0,'id':'c1','function':{'name':'calculate','arguments':'{}'}}]}) + b'data: [DONE]\n\n'
+    transport(lambda request:httpx.Response(200, headers={'content-type':'text/event-stream'}, stream=Chunks([raw])))
+    with pytest.raises(ProviderStreamError, match='未执行工具'):
+        asyncio.run(provider.complete([{'role':'user','content':'hi'}], tools=[{'type':'function','function':{'name':'calculate'}}]))
+    event = next(item for item in store.list_events() if item['kind'] == 'model_stream_incomplete')
+    assert event['details']['done_received'] and not event['details']['finish_received']
+    assert event['details']['has_tool_calls'] and store.list_usage()[0]['unconfirmed']
+
+
+@pytest.mark.parametrize('continuation', [False, True])
+def test_stream_fallback_is_opt_in_and_does_not_replay_tool_continuations(setup_provider, continuation):
+    provider, settings, store, transport = setup_provider
+    settings.update({'providers':[dict(PROVIDER_DEFAULTS,id=key,model=key,base_url=f'https://{key}.invalid/v1',timeout_fallback=True) for key in ('a','b')],
+                     'routing':{'chat':'a','fallback':['b']}})
+    seen = []
+    def handler(request):
+        seen.append(request.url.host)
+        if request.url.host == 'a.invalid':
+            return httpx.Response(200, headers={'content-type':'text/event-stream'}, stream=Chunks([sse({'content':'PRIVATE_PARTIAL_TEXT'})]))
+        return httpx.Response(200,json={'choices':[{'message':{'content':'完整的备用回答'}}]})
+    transport(handler)
+    messages = [{'role':'user','content':'hi'}]
+    if continuation:
+        messages.append({'role':'tool','tool_call_id':'c1','content':'already executed'})
+        with pytest.raises(ProviderStreamError): asyncio.run(provider.complete(messages))
+        assert seen == ['a.invalid']
+    else:
+        assert asyncio.run(provider.complete(messages))['content'] == '完整的备用回答'
+        assert seen == ['a.invalid','b.invalid']
+    assert sum(bool(row.get('unconfirmed')) for row in store.list_usage()) == 1
+    event = next(item for item in store.list_events() if item['kind'] == 'model_stream_incomplete')
+    assert 'PRIVATE_PARTIAL_TEXT' not in json.dumps(event)
+    assert not event['details']['done_received'] and event['details']['received_bytes'] > 0
 
 
 def test_heartbeats_do_not_extend_first_content_deadline():

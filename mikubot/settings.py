@@ -54,7 +54,7 @@ DEFAULTS = {
     'output': {'enabled':True,'mode':'model','target_chars':160,'max_chars':320,'interval_ms':600,'max_parts':8,'platform_max_chars':1800,
                'reply_max_chars':0,'message_max_chars':0,'remove_parentheses':False},
     'exploration': {'enabled':False,'interval_hours':24,'daily_searches':6,'max_results':4,'valid_days':90},
-    'routing': {'chat': '', 'planner':'', 'memory': '', 'gate': '', 'summary': '', 'embedding': '', 'fallback': []},
+    'routing': {'chat': '', 'planner':'', 'memory': '', 'gate': '', 'summary': '', 'distillation': '', 'embedding': '', 'fallback': []},
     'context': {'enabled': False, 'trigger_messages': 60, 'max_chars': 18000, 'keep_recent': 24,
                 'max_input_chars':80000, 'max_history_messages':400, 'max_images':3},
     'paused': False,
@@ -82,8 +82,10 @@ def resolve_model(config, purpose='chat', *, model_id=None):
     """An empty task route keeps the original single-model configuration."""
     aliases = {'jargon_learning': 'memory', 'expression_learning': 'memory', 'memory_extract': 'memory', 'context_digest': 'summary','knowledge':'summary','sticker_select':'planner'}
     route = aliases.get(purpose, purpose)
-    route = route if route in ('planner','memory', 'gate', 'summary', 'embedding') else 'chat'
+    route = route if route in ('planner','memory', 'gate', 'summary', 'distillation', 'embedding') else 'chat'
     provider_id = config.get('routing', {}).get(route, '') if model_id is None else model_id
+    if route == 'distillation' and model_id is None and not provider_id:
+        return resolve_model(config, 'chat')
     if provider_id and provider_id != 'default':
         found = next((x for x in config.get('providers', []) if x.get('id') == provider_id), None)
         if found and found.get('enabled', True):
@@ -479,7 +481,7 @@ class Settings:
                 raise ValueError('感知现实时间开关须为布尔值')
             routing = updated['routing']
             ids = {x['id'] for x in updated['providers']}
-            for key in ('chat', 'planner', 'memory', 'gate', 'summary', 'embedding'):
+            for key in ('chat', 'planner', 'memory', 'gate', 'summary', 'distillation', 'embedding'):
                 if not isinstance(routing[key], str) or routing[key] and routing[key] not in ids:
                     raise ValueError('任务路由引用了不存在的模型；删除模型前请调整路由')
                 selected = next((item for item in updated['providers'] if item['id'] == routing[key]), {})
@@ -571,7 +573,7 @@ class Settings:
                 updated['budget'][key] = max(0, float(updated['budget'][key]))
                 if not math.isfinite(updated['budget'][key]):
                     raise ValueError('预算须为有限数字')
-            price_models = [resolve_model(updated, key) for key in ('chat', 'planner', 'memory', 'gate', 'summary')]
+            price_models = [resolve_model(updated, key) for key in ('chat', 'planner', 'memory', 'gate', 'summary', 'distillation')]
             if memory['semantic_enabled']:
                 price_models.append(resolve_model(updated, 'embedding'))
             price_models += [x for x in updated['providers'] if x['id'] in routing['fallback'] and x['enabled']]

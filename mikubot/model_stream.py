@@ -18,6 +18,14 @@ class ModelStreamError(ValueError):
     pass
 
 
+class IncompleteModelStreamError(ModelStreamError):
+    def __init__(self, *, done, finished, tool_calls, received_bytes):
+        suffix = '，未执行工具' if tool_calls else '，未采用残缺回复'
+        super().__init__('模型流在完整回复结束前中断' + suffix)
+        self.diagnostics = {'done_received': done, 'finish_received': finished,
+                            'has_tool_calls': tool_calls, 'received_bytes': received_bytes}
+
+
 @asynccontextmanager
 async def _response_stream(client, url, payload, headers):
     context = client.stream('POST', url, json=payload, headers=headers)
@@ -169,8 +177,11 @@ async def _receive_chat(client, url, payload, headers, *, first_token_seconds, c
             raise ModelStreamError('模型流包含无效编码') from exc
         if check:
             check()
-        if not finished or not (content or calls):
-            raise ModelStreamError('模型流在完整回复结束前中断，未执行工具')
+        # Some relays omit finish_reason but send an explicit terminal sentinel.
+        # Accept that only for text: tool arguments need the choice completion.
+        if not (finished or done and not calls) or not (any(content) or calls):
+            raise IncompleteModelStreamError(done=done, finished=finished,
+                                            tool_calls=bool(calls), received_bytes=size)
         for call in calls.values():
             if not call['id'] or not call['function']['name']:
                 raise ModelStreamError('模型工具调用缺少完整标识')

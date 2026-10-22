@@ -9,6 +9,7 @@ import pytest
 
 from mikubot.corpus import corpus_chunks, inspect_corpus, read_file
 from mikubot.distillation import DistillationService
+from mikubot.provider import ProviderStreamError, ProviderError
 
 
 @pytest.fixture
@@ -228,6 +229,104 @@ async def test_character_generates_persona_and_complete_skill_draft(service):
         assert manifest['version'] == '动画第一季' and manifest['source_count'] == 2
         assert all(source['retrieved_at'] and source['content_hash'] for source in sources)
         assert '权限' in bundle.read('SKILL.md').decode()
+
+
+@pytest.mark.anyio
+async def test_long_character_sources_are_batched_with_all_tails_and_ids(service):
+    engine, model, pages = service
+    for index, page in enumerate(pages.values()):
+        page['text'] = '测试人物在测试作品中表现认真。' * 900 + f'原始来源尾部{index}'
+    discovery = await engine.discover({'character':'测试人物','work':'测试作品'})
+    result = await engine.generate({'mode':'character','discovery_id':discovery['discovery_id'],
+        'confirmed':True,'candidate_ids':[row['id'] for row in discovery['candidates']]})
+    batches = [messages for messages, kwargs in model.calls if '从本片段提取' in messages[-1]['content']]
+    assert len(batches) == 4 and len(model.calls) == 11
+    assert all(len(messages[-1]['content']) < 10000 for messages in batches)
+    joined = '\n'.join(messages[-1]['content'] for messages in batches)
+    assert '原始来源尾部0' in joined and '原始来源尾部1' in joined
+    assert '[s1]' in joined and '[s2]' in joined
+    tracks = [messages[-1]['content'] for messages, kwargs in model.calls if '本维度：' in messages[-1]['content']]
+    assert len(tracks) == 5 and all(len(text) < 18000 and '[s1]' in text and '[s2]' in text for text in tracks)
+    assert result['usage']['calls'] == 11
+
+
+@pytest.mark.anyio
+async def test_batched_research_resume_reuses_notes_and_retains_failed_attempts(service, monkeypatch):
+    engine, model, pages = service
+    for page in pages.values(): page['text'] = '测试人物在测试作品中表现认真。' * 900
+    discovery = await engine.discover({'character':'测试人物','work':'测试作品'})
+    payload = {'mode':'character','discovery_id':discovery['discovery_id'],'confirmed':True,
+               'max_calls':13,'candidate_ids':[row['id'] for row in discovery['candidates']]}
+    complete = model.complete
+    attempts, saved = [], []
+    async def flaky(messages, **kwargs):
+        attempts.append(messages)
+        if len(attempts) in (5,6): raise ProviderStreamError('流中断')
+        return await complete(messages, **kwargs)
+    monkeypatch.setattr(model, 'complete', flaky)
+    save = lambda **state:saved.append(json.loads(json.dumps(state)))
+    with pytest.raises(ProviderStreamError): await engine.generate(payload, checkpoint=save)
+    assert len(attempts) == 6
+    result = await engine.generate(payload, checkpoint=save, resume_state=saved[-1]['distillation_cache'])
+    assert len(attempts) == 13 and result['usage']['calls'] == 13
+    assert result['resumed_steps'] == 4 and result['usage']['estimated']
+
+
+@pytest.mark.anyio
+async def test_distillation_retries_current_analysis_once_and_counts_unknown_cost(service, monkeypatch):
+    engine, model, _ = service
+    complete = model.complete
+    attempts, events = [], []
+    async def flaky(messages, **kwargs):
+        attempts.append(messages)
+        if len(attempts) == 1: raise ProviderStreamError('流中断')
+        return await complete(messages, **kwargs)
+    monkeypatch.setattr(model, 'complete', flaky)
+    result = await engine.generate({'mode':'generate','description':'温柔的读书伙伴'}, progress=events.append)
+    assert len(attempts) == 2 and attempts[0] == attempts[1]
+    assert result['usage']['calls'] == 2 and result['usage']['estimated']
+    assert result['usage']['tokens'] > 180
+    assert any(event['stage'] == 'retry' for event in events)
+
+
+@pytest.mark.anyio
+async def test_distillation_persistent_failure_stops_after_two_and_saves_attempt_budget(service, monkeypatch):
+    engine, model, _ = service
+    attempts, saved = [], []
+    async def fail(messages, **kwargs):
+        attempts.append(messages)
+        raise ProviderStreamError('流中断')
+    monkeypatch.setattr(model, 'complete', fail)
+    with pytest.raises(ProviderStreamError):
+        await engine.generate({'mode':'generate','description':'读书伙伴'}, checkpoint=lambda **state:saved.append(json.loads(json.dumps(state))))
+    assert len(attempts) == 2
+    cache = saved[-1]['distillation_cache']
+    assert cache['usage']['calls'] == 2 and cache['usage']['estimated'] and not cache['results']
+
+
+@pytest.mark.anyio
+async def test_distillation_does_not_retry_invalid_result(service, monkeypatch):
+    engine, model, _ = service
+    attempts = []
+    async def fail(messages, **kwargs):
+        attempts.append(messages)
+        raise ProviderError('模型流返回无效事件')
+    monkeypatch.setattr(model, 'complete', fail)
+    with pytest.raises(ProviderError): await engine.generate({'mode':'generate','description':'读书伙伴'})
+    assert len(attempts) == 1
+
+
+@pytest.mark.anyio
+async def test_cancel_between_analysis_attempts_prevents_retry(service, monkeypatch):
+    engine, model, _ = service
+    attempts = []
+    async def fail(messages, **kwargs):
+        attempts.append(messages)
+        raise ProviderStreamError('流中断')
+    monkeypatch.setattr(model, 'complete', fail)
+    with pytest.raises(asyncio.CancelledError):
+        await engine.generate({'mode':'generate','description':'读书伙伴'}, cancel_check=lambda:not attempts)
+    assert len(attempts) == 1
 
 
 @pytest.mark.anyio

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from .settings import resolve_model, resolved_identity
 from .output import OutputLimitError, output_config, split_output
-from .provider import ProviderTimeoutError, ProviderConnectionError, ProviderRateLimitError, is_budget_exceeded
+from .provider import ProviderTimeoutError, ProviderConnectionError, ProviderRateLimitError, ProviderStreamError, is_budget_exceeded
 from .timezones import local_now, current_time_context
 
 
@@ -39,6 +39,8 @@ def _failure_feedback(exc, *, planner=False):
     # Never relay provider URLs, credentials, remote response bodies or tracebacks.
     if isinstance(exc, OutputLimitError):
         return '这次内容里有超过发送长度上限的完整链接或代码，原文已保留在本地对话记录。'
+    if isinstance(exc, ProviderStreamError):
+        return '模型连接在回复完成前结束，未采用残缺回复；请稍后重试，或检查模型服务的流式连接。'
     if isinstance(exc, ProviderTimeoutError):
         return '这次回复等待模型响应超时，请稍后再试；也可以在模型参数中调整等待超时。'
     if isinstance(exc, ProviderConnectionError):

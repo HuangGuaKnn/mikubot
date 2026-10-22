@@ -249,7 +249,7 @@ function splitNames(value) { return [...new Set(String(value || "").split(/[\n\r
 
 
 // 0.3: provider routing, grounded context summaries, expression learning and diagnostics.
-const routeNames = {chat:"日常对话",planner:"Planner 语义规划",memory:"记忆与学习",gate:"群聊判断（兼容路由）",summary:"上下文与人格知识整理",embedding:"语义检索"};
+const routeNames = {chat:"日常对话",planner:"Planner 语义规划",memory:"记忆与学习",gate:"群聊判断（兼容路由）",summary:"上下文与人格知识整理",distillation:"人格生成与蒸馏（留空继承日常对话）",embedding:"语义检索"};
 const checkNames = {ok:"正常",warning:"待留意",error:"需处理",info:"提示"};
 
 

@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .corpus import inspect_corpus as scan_corpus, corpus_chunks
-from .provider import estimate_tokens
+from .provider import estimate_tokens, ProviderStreamError, ProviderTimeoutError, ProviderConnectionError
 from .tools import read_public, search_public
 from .character_catalog import CharacterCatalog
 
@@ -366,12 +366,28 @@ class DistillationService:
             budget.check()
             checkpoint['reused'] += 1
             return checkpoint['state']['results'][cache_key]
-        reserved = budget.reserve(messages, max_tokens)
-        if checkpoint:
-            checkpoint['state']['usage'] = budget.summary()
-            checkpoint['save'](distillation_cache=checkpoint['state'])
-        result = await self.provider.complete(messages, purpose='distillation', scope_id=scope_id,
-                                              max_tokens=max_tokens, before_send=budget.check)
+        for attempt in range(2):
+            reserved = budget.reserve(messages, max_tokens)
+            if checkpoint:
+                checkpoint['state']['usage'] = budget.summary()
+                checkpoint['save'](distillation_cache=checkpoint['state'])
+            try:
+                result = await self.provider.complete(messages, purpose='distillation', scope_id=scope_id,
+                                                      max_tokens=max_tokens, before_send=budget.check)
+                break
+            except (ProviderStreamError, ProviderTimeoutError, ProviderConnectionError) as exc:
+                # Analysis has no tool side effects. Keep the failed attempt's
+                # estimated cost and checkpoint before one fresh, bounded retry.
+                budget.usage_unknown = True
+                if checkpoint:
+                    checkpoint['state']['usage'] = budget.summary()
+                    checkpoint['save'](distillation_cache=checkpoint['state'])
+                if attempt:
+                    raise type(exc)(str(exc) + '；当前分析已重试1次仍未完成。可在模型供应商中选择专用人格蒸馏模型，或检查中转服务超时；已完成步骤保留。') from exc
+                budget.check()
+                await _progress(getattr(budget, 'progress', None), 'retry',
+                    '模型连接未完整结束，正在重试当前分析（最多1次，计入任务配额；已完成步骤保留）')
+                await asyncio.sleep(.4)
         budget.finish(result, reserved)
         budget.check()
         content = result.get('content')
@@ -421,6 +437,7 @@ class DistillationService:
             raise ValueError('请选择直接生成、作品角色或上传语料模式')
         scope_id = _text(payload.get('scope_id', 'web:default'), '会话标识', 200, required=True)
         budget = _RunBudget(payload, cancel_check)
+        budget.progress = progress
         checkpoint = _CHECKPOINT.get()
         if checkpoint:
             usage = checkpoint['state'].get('usage') or {}
@@ -570,6 +587,28 @@ class DistillationService:
                                    for item in sources if item['status'] == 'read')
         if len(source_data) > 70000:
             raise ValueError('已确认来源正文过多，请减少来源或分次蒸馏，避免漏掉资料')
+        if len(source_data) > 12000:
+            # Read every source once in bounded batches, carrying attribution
+            # into the notes used by all five tracks. Never silently truncate.
+            chunks = []
+            for item in sources:
+                if item['status'] != 'read':
+                    continue
+                text = texts[item['id']]
+                for offset in range(0, len(text), 8000):
+                    chunks.append(f"[{item['id']}] {item['title']}\nURL:{item['url']}\n片段起点:{offset}\n" + text[offset:offset + 8000])
+            if len(chunks) + 7 > budget.max_calls:
+                raise ValueError('资料需要分批研究，任务调用上限不足；请提高任务上限或减少来源后重试')
+            observations = []
+            for index, chunk in enumerate(chunks):
+                await _progress(progress, 'sources', f'正在分批整理资料：{index + 1}/{len(chunks)}', index, len(chunks))
+                note = await self._complete(identity + '从本片段提取身份时间线、性格行为、表达、关系和关键场景。'
+                    '保留 source id、具体证据、矛盾和未知。只提炼本片段，不补编；控制在1000字以内。',
+                    chunk, budget, scope_id, max_tokens=650)
+                observations.append(chunk.split('\n', 1)[0] + f'\n资料片段 {index + 1}\n{note}')
+            source_data = '\n\n'.join(observations)
+            if len(source_data) > 16000:
+                raise ValueError('分批资料摘要仍过长；请减少来源或调整蒸馏模型后重试，已完成分析保存在检查点')
         for index, (key, title, _) in enumerate(DIMENSIONS):
             budget.check()
             await _progress(progress, 'research', f'正在研究：{title}', index, len(DIMENSIONS))

@@ -12,7 +12,7 @@ from contextlib import nullcontext
 from .settings import PROVIDER_DEFAULTS, Settings, resolve_model
 
 
-PURPOSES = ('chat', 'planner', 'memory', 'gate', 'summary', 'embedding')
+PURPOSES = ('chat', 'planner', 'memory', 'gate', 'summary', 'distillation', 'embedding')
 _SOURCE_FIELDS = ('name', 'base_url', 'api_key', 'enabled', 'clear_api_key')
 _MODEL_FIELDS = ('name', 'model', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type',
                  'stream_mode', 'first_token_timeout_seconds', 'total_timeout_seconds', 'timeout_fallback')
@@ -233,7 +233,7 @@ class ModelCatalog:
 
     def update_routing(self, payload):
         if not isinstance(payload, dict) or any(key not in (*PURPOSES, 'fallback') for key in payload):
-            raise ValueError('用途须为 chat/planner/memory/gate/summary/embedding/fallback')
+            raise ValueError('用途须为 chat/planner/memory/gate/summary/distillation/embedding/fallback')
         with self._lock:
             config = self.settings.get()
             routing = dict(config['routing'], **payload)
