@@ -85,6 +85,29 @@ def _is_search_page(url):
     return parsed.path.rstrip('/').lower() in ('/search', '/w/search') or bool(re.search(r'(?:^|&)search=', parsed.query, re.I))
 
 
+def _discovery_reason(exc):
+    text = str(exc)
+    code = re.search(r'HTTP (\d{3})', text)
+    if code:
+        return '网页返回 HTTP ' + code[1]
+    for needle, reason in [('验证', '站点需要验证'), ('解析网页地址', '站点域名无法解析'),
+                           ('超时', '读取或检索超时'), ('读取限制', '网页超过读取大小限制'), ('没有返回可用', '搜索没有可用结果'),
+                           ('未匹配', '页面未匹配角色名'), ('角色正文', '页面缺少角色正文'),
+                           ('私网', '来源地址不允许读取'), ('内部网络', '来源地址不允许读取')]:
+        if needle in text:
+            return reason
+    return '读取或检索超时' if isinstance(exc, TimeoutError) else '来源读取失败'
+
+
+class DiscoveryError(ValueError):
+    def __init__(self, failures, *, urls=0):
+        self.failures = failures
+        reasons = list(dict.fromkeys(row['reason'] for row in failures))[:4]
+        detail = '；'.join(reasons) or '搜索没有可用结果'
+        super().__init__(f'没有找到可确认的角色资料（检索到 {urls} 个待读取链接）：{detail}。'
+                         '可在下方“资料链接”填写可访问的角色页面后重试；角色名有歧义时请补全名称。')
+
+
 def _guard(cancel_check):
     if cancel_check is not None and cancel_check() is False:
         raise asyncio.CancelledError('人格蒸馏已取消')
@@ -191,53 +214,90 @@ class DistillationService:
             value = _public_url(url)
             if value not in urls:
                 urls.append(value)
-        # Site-scoped discovery preserves candidates; no original adapter's
-        # first-result auto-resolution or external subprocess is used.
-        queries = [f'{character} {work} site:moegirl.org.cn', f'{character} {work} site:wikipedia.org', f'{character} {work} 角色 官方']
-        for index, query in enumerate(queries):
+        deadline = asyncio.get_running_loop().time() + 40
+        queries = [f'{character} {work} 角色 官方', f'{character} {work} site:moegirl.org.cn', f'{character} {work} site:wikipedia.org']
+
+        def failed(exc, **details):
+            reason = _discovery_reason(exc)
+            failures.append(dict(details, status='failed', error=str(exc)[:300] or reason, reason=reason, retrieved_at=_now()))
+
+        async def search(index, query):
             _guard(cancel_check)
             await _progress(progress, 'discover', '正在查找角色候选与作品版本', index, len(queries))
             try:
-                result = await self.search_fn(query[:300])
+                result = await asyncio.wait_for(self.search_fn(query[:300]), timeout=12)
                 _guard(cancel_check)
+                found = []
                 for url in result.get('links', [])[:6]:
                     try:
                         url = _public_url(url)
                     except ValueError:
                         continue
-                    if url not in urls:
+                    if url not in found:
+                        found.append(url)
+                return found
+            except (ValueError, OSError, TimeoutError) as exc:
+                failed(exc, query=query, stage='search')
+                return []
+
+        # Explicit sources are a usable escape hatch when search is blocked.
+        # Otherwise mix result sets so one inaccessible wiki cannot fill all slots.
+        if not urls:
+            groups = await asyncio.gather(*(search(index, query) for index, query in enumerate(queries)))
+            host_counts = {}
+            for position in range(6):
+                for group in groups:
+                    if position >= len(group):
+                        continue
+                    url = group[position]
+                    host = urlsplit(url).hostname
+                    if url not in urls and host_counts.get(host, 0) < 2:
                         urls.append(url)
-            except (ValueError, OSError) as exc:
-                failures.append({'query': query, 'status': 'failed', 'error': str(exc)[:300], 'retrieved_at': _now()})
-        candidates = []
-        for url in urls[:8]:
-            _guard(cancel_check)
+                        host_counts[host] = host_counts.get(host, 0) + 1
+                    if len(urls) >= 8:
+                        break
+                if len(urls) >= 8:
+                    break
+        gate = asyncio.Semaphore(3)
+
+        async def candidate_for(url):
             try:
-                page = await self.read_fn(url)
+                async with gate:
+                    _guard(cancel_check)
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    if remaining <= 0:
+                        raise TimeoutError()
+                    page = await asyncio.wait_for(self.read_fn(url), timeout=min(10, remaining))
                 _guard(cancel_check)
                 final_url = _public_url(page.get('url') or url)
                 title = str(page.get('title') or '')[:240]
                 body = str(page.get('text') or '')[:16000].strip()
+                if any(value in (title + '\n' + body[:1000]).casefold() for value in
+                       ('verify you are human', 'just a moment', '请完成验证', 'checking your browser')):
+                    raise ValueError('站点需要验证')
                 # A search landing page or an empty/error response isn't a
                 # character candidate. Keep textual names as evidence hints.
                 if _is_search_page(final_url) or len(body) < 40 or not title or title.lower() in ('search', '搜索', 'bing'):
                     raise ValueError('该页面没有足够角色正文')
-                aliases = [character.casefold(), work.casefold()]
-                if not any(alias in (title + '\n' + body).casefold() for alias in aliases):
-                    raise ValueError('页面正文未匹配作品名或角色名，请换用明确的人物资料链接')
+                normalized = re.sub(r'\s+', '', title + '\n' + body).casefold()
+                if re.sub(r'\s+', '', character).casefold() not in normalized:
+                    raise ValueError('页面正文未匹配角色名，请换用明确的人物资料链接')
                 candidate = {'id': hashlib.sha256(final_url.encode()).hexdigest()[:16], 'title': title,
                              'url': final_url, 'snippet': body[:420], 'version_hint': str(page.get('version') or '请确认该来源对应的作品／版本与时间线')[:240],
                              'retrieved_at': _now(), 'content_hash': _hash(body), 'source_tier': _tier(final_url),
                              'officiality': 'not_verified', 'published_at': page.get('published_at') or ''}
-                if candidate['id'] not in {x['id'] for x in candidates}:
-                    candidates.append(candidate)
-            except (ValueError, OSError) as exc:
-                failures.append({'url': url, 'status': 'failed', 'error': str(exc)[:300], 'retrieved_at': _now()})
+                return candidate
+            except (ValueError, OSError, TimeoutError) as exc:
+                failed(exc, url=url, stage='read')
+                return None
+        candidates = list({item['id']: item for item in await asyncio.gather(*(candidate_for(url) for url in urls)) if item}.values())
         if not candidates:
-            raise ValueError('没有找到可确认的角色资料；搜索可能受限或名称有歧义，请检查作品／角色名，或提供明确资料链接')
+            raise DiscoveryError(failures, urls=len(urls))
         if len(candidates) < 2:
             warnings.append('仅找到一份候选资料，重要结论尚未交叉验证；可补来源后再生成')
         warnings.append('候选来源尚未确认角色身份、版本或官方性；请核对后开始蒸馏')
+        if failures:
+            warnings.append(f'{len(failures)} 项检索或读取失败；仅使用下面实际读到的正文，不用搜索摘要代替角色资料')
         value = {'mode': 'character', 'character': character, 'work': work, 'candidates': candidates,
                  'warnings': warnings, 'failures': failures, 'requires_confirmation': True, 'created_at': _now()}
         _guard(cancel_check)

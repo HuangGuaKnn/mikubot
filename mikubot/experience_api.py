@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from .access import manager_for, normalize_administrators
 from .attachments import AttachmentLibrary, bounded_parse
 from .computer import ComputerService
-from .distillation import DistillationService
+from .distillation import DiscoveryError, DistillationService
 from .documents import MAX_BYTES, extract_document
 from .qq_pairing import LocalQQPairing
 from .runs import RunManager, TERMINAL, now
@@ -348,7 +348,11 @@ def install_experience(app, store, settings, provider, chat, router, data_dir, r
 
     @app.post('/api/persona/distill/character/search')
     async def search_character(payload: dict = Body(...)):
-        return await distillation.discover(payload)
+        try:
+            return await distillation.discover(payload)
+        except DiscoveryError as exc:
+            store.add_event('distillation_discovery', '角色资料检索未完成', failures=exc.failures)
+            raise
 
     @app.post('/api/persona/distill/corpus')
     async def upload_corpus(file: UploadFile = File(...)):

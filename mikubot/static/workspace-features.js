@@ -37,6 +37,11 @@ function identitySection() {
   return `<section class="panel settings-section" id="identity-section"><div class="section-title"><span>${icon("persona")}</span><div><h2>名称、触发与 Planner</h2><p>产品叫 mikubot；聊天时的称呼与人格可以独立设置。</p></div></div><form data-form="identity"><div class="form-grid">${field("name","机器人名称",identity.name || "初音未来","text","叫这个名字时可以触发机器人。","required maxlength=\"40\"")}${field("aliases","机器人别名",(identity.aliases || []).join("，"),"text","多个别名以逗号或换行分隔，例如 Miku、初音。","maxlength=\"1000\"")}</div>${toggle("respond_to_at","被 @ 时触发","与叫名字、回复消息分别控制；各会话可覆盖。",identity.respond_to_at ?? true)}${toggle("respond_to_reply","被回复时触发","识别对机器人消息的回复。",identity.respond_to_reply ?? true)}${toggle("respond_to_name","提及名称或别名时触发","按完整称呼识别；触发后仍可由 Planner 判断交谈对象。",identity.respond_to_name ?? true)}${toggle("planner_enabled","启用 Planner 语义规划","先判断在对谁说话、是否需要回复，以及准备说什么；只有回复或本轮不回复。",identity.planner_enabled ?? true)}${toggle("proactive_enabled","允许语义主动接话","同时遵守会话回应方式、安静时段与冷却；依据参与价值决定，不做概率抽签。",identity.proactive_enabled ?? true)}<p class="help-caption">每个会话可继承或覆盖这些设置。指定私聊可在会话设置中开启“每条必回复”，跳过回复与否的判断。自动化总暂停、QQ 接收规则仍然有效。</p><div class="section-actions"><button type="submit" class="btn primary">保存名称与触发</button>${button("调整会话覆盖","go-groups","ghost","groups")}</div></form></section>`;
 }
 
+function timeAwarenessSection() {
+  const clock = state.settings.time || {};
+  return `<section class="panel settings-section" id="time-awareness-section"><h2>现实时间</h2><form data-form="time-awareness">${toggle("awareness_enabled","感知现实时间","让对话和 Planner 获知当前日期、时间、星期与时区；关闭后不再主动提供当前时钟，提醒和日配额照常运行。",clock.awareness_enabled ?? true)}<div class="form-grid">${field("timezone","时区（IANA）",clock.timezone || "Asia/Shanghai","text","例如 Asia/Shanghai、Asia/Hong_Kong 或 America/New_York。","required data-full")}</div><div class="section-actions"><button type="submit" class="btn primary">保存时间设置</button></div></form></section>`;
+}
+
 function outputSection() {
   return `<section class="panel settings-section" id="output-section"><div class="section-title"><span>${icon("chat")}</span><div><h2>回复内容与消息分段</h2><p>模型在生成时决定消息边界；可独立设置整轮和单条长度，以及是否删除括号内容。</p></div></div><form data-form="output">${outputFields(state.settings.output || {})}<div class="section-actions"><button type="submit" class="btn primary">保存输出方式</button></div></form></section>`;
 }
@@ -196,5 +201,5 @@ async function handleSubmit(kind,form) {
   return true;
 }
 
-return {scopeModal,identitySection,outputSection,plannerSection,explorationSection,renderPersonaKnowledge,safeKnowledgeURL,explorePersona,renderGroups,memoryToolsPanel,personaExtras,handleAction,handleSubmit};
+return {scopeModal,identitySection,timeAwarenessSection,outputSection,plannerSection,explorationSection,renderPersonaKnowledge,safeKnowledgeURL,explorePersona,renderGroups,memoryToolsPanel,personaExtras,handleAction,handleSubmit};
 })();

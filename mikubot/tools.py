@@ -100,6 +100,7 @@ class _TextParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.parts, self.hidden, self.title, self.in_title, self.links = [], 0, [], False, []
+        self.search_links, self.in_result_heading = [], False
         self.published_at, self.updated_at, self.event_dates = '', '', []
         self._jsonld = None
     def handle_starttag(self, tag, attrs):
@@ -124,10 +125,15 @@ class _TextParser(HTMLParser):
             self.hidden += 1
         if tag == 'title':
             self.in_title = True
+        if tag == 'h2':
+            self.in_result_heading = True
         if tag == 'a' and not self.hidden:
             href = dict(attrs).get('href') or ''
             if len(self.links) < 120 and len(href) <= 3000 and href.startswith(('http://', 'https://', '/')):
                 self.links.append(href)
+            if (len(self.search_links) < 30 and len(href) <= 3000
+                    and (self.in_result_heading or 'result__a' in (attributes.get('class') or '').split())):
+                self.search_links.append(href)
         if tag in ('p', 'div', 'br', 'li', 'h1', 'h2', 'h3', 'article', 'section'):
             self.parts.append('\n')
     def handle_endtag(self, tag):
@@ -142,6 +148,8 @@ class _TextParser(HTMLParser):
             self.hidden = max(0, self.hidden - 1)
         if tag == 'title':
             self.in_title = False
+        if tag == 'h2':
+            self.in_result_heading = False
     def handle_data(self, data):
         if self._jsonld is not None and sum(map(len, self._jsonld)) < 100000:
             self._jsonld.append(data[:100000])
@@ -246,7 +254,7 @@ def _read_public(url: str):
                 links.append(resolved)
                 link_chars += len(resolved)
             return {'url': url, 'title': ''.join(parser.title).strip() or host, 'text': text[:16000], 'truncated': len(text) > 16000,
-                    'links': links, 'published_at': parser.published_at,
+                    'links': links, 'search_links': [urljoin(url, href) for href in parser.search_links], 'published_at': parser.published_at,
                     'updated_at': parser.updated_at or public_date(response.getheader('Last-Modified', '')),
                     'event_dates': parser.event_dates, 'feed_items': feed_items}
         except (OSError, http.client.HTTPException) as exc:
@@ -284,10 +292,17 @@ def _search_result_url(value):
             url = base64.b64decode(payload + '=' * (-len(payload) % 4), altchars=b'-_', validate=True).decode('utf-8')
             parsed = urlsplit(url)
             host = (parsed.hostname or '').rstrip('.').lower()
+        if _domain(host, 'duckduckgo.com') and parsed.path.rstrip('/') == '/l':
+            values = parse_qs(parsed.query, max_num_fields=30).get('uddg', [])
+            if len(values) != 1:
+                return ''
+            url = values[0]
+            parsed = urlsplit(url)
+            host = (parsed.hostname or '').rstrip('.').lower()
         if (not host or parsed.scheme not in ('http', 'https') or parsed.username or parsed.password
                 or parsed.port not in (None, 80, 443) or len(url) > 3000 or any(ord(ch) < 33 for ch in url)):
             return ''
-        if any(_domain(host, domain) for domain in ('bing.com', 'microsoft.com')):
+        if any(_domain(host, domain) for domain in ('bing.com', 'microsoft.com', 'duckduckgo.com')):
             return ''
         if host == 'localhost' or host.endswith(('.localhost', '.local', '.internal')):
             return ''
@@ -304,17 +319,31 @@ def _search_result_url(value):
 async def search_public(query):
     if not query.strip() or len(query) > 300:
         raise ValueError('搜索内容需为 1—300 个字符')
-    page = await read_public('https://www.bing.com/search?q=' + quote(query))
-    urls = []
-    for candidate in page.get('links', [])[:120]:
-        result = _search_result_url(candidate)
-        if result and result not in urls:
-            urls.append(result)
-            if len(urls) == 10:
-                break
-    # This is a public HTML search channel; rate limits/captchas are reported, not fabricated.
-    if len(page['text']) < 100 or any(x in page['text'].lower() for x in ('verify you are human', 'unusual traffic', '请完成验证')):
-        raise ValueError('搜索渠道需要验证或暂不可用，请稍后重试或直接提供网页链接')
-    if not urls:
-        raise ValueError('搜索渠道没有返回可用公开链接；可能没有结果或页面格式已变化，请稍后重试或提供网页链接')
-    return {'query': query, 'source': page['url'], 'text': page['text'][:10000], 'links': urls[:10]}
+    channels = [
+        ('bing_html', 'https://www.bing.com/search?q=' + quote(query)),
+        ('bing_rss', 'https://www.bing.com/search?format=rss&q=' + quote(query)),
+        ('duckduckgo_html', 'https://html.duckduckgo.com/html/?q=' + quote(query)),
+    ]
+    failures = []
+    for channel, address in channels:
+        try:
+            page = await asyncio.wait_for(read_public(address), timeout=6)
+            body = str(page.get('text') or '')
+            if (not page.get('feed_items') and len(body) < 100) or any(x in body.lower() for x in ('verify you are human', 'unusual traffic', '请完成验证', 'anomaly-modal')):
+                raise ValueError('搜索渠道需要验证或暂不可用')
+            candidates = (page.get('search_links') or [item.get('url') for item in page.get('feed_items', []) if isinstance(item, dict)]
+                          or page.get('links', []))
+            urls = []
+            for candidate in candidates[:120]:
+                result = _search_result_url(candidate)
+                if result and result not in urls:
+                    urls.append(result)
+                    if len(urls) == 10:
+                        break
+            if not urls:
+                raise ValueError('搜索渠道没有返回可用公开链接')
+            return {'query': query, 'source': page['url'], 'text': body[:10000], 'links': urls,
+                    'channel': channel, 'failures': failures}
+        except (ValueError, OSError, TimeoutError):
+            failures.append({'channel': channel, 'status': 'unavailable'})
+    raise ValueError('搜索渠道没有返回可用公开链接；渠道可能超时、需要验证或页面格式已变化，请直接提供资料链接后重试')

@@ -65,6 +65,17 @@ async function main(){
   assert.equal(calls.length,before,"opening distillation must not call research/model endpoints");
   assert.match(modal[2],/data-action="distill-character"/);
   await assert.rejects(ui.handleSubmit("distill-start",{values:{confirmed:false}}),/先确认/);
+  await ui.handleAction("distill-character",{dataset:{}});
+  assert.match(modal[2], /name="source_urls"/);
+  nodes.set("#modal", {classList:{add(){}}});
+  responder=async()=>({candidates:[],warnings:[],discovery_id:"discovery-fixture"});
+  await ui.handleSubmit("distill-search",{values:{work:"作品",character:"角色",source_urls:"  https://wiki.example/character\r\nhttps://official.example/character\nhttps://wiki.example/character\n"}});
+  assert.deepEqual(plain(calls.at(-1)[1].body),{work:"作品",character:"角色",source_urls:["https://wiki.example/character","https://official.example/character"]});
+  const searched=calls.length;
+  await assert.rejects(ui.handleSubmit("distill-search",{values:{work:"作品",character:"角色",source_urls:Array.from({length:7},(_,i)=>"https://example.test/"+i).join("\n")}}),/最多提供6个/);
+  assert.equal(calls.length,searched);
+  await ui.handleSubmit("time-awareness",{values:{awareness_enabled:false,timezone:"Asia/Hong_Kong"}});
+  assert.deepEqual(plain(calls.at(-1)),["/api/settings",{method:"PUT",body:{time:{awareness_enabled:false,timezone:"Asia/Hong_Kong"}}}]);
 
   responder=async()=>({id:"web:auto"});
   await ui.handleAction("new-chat",{dataset:{}});

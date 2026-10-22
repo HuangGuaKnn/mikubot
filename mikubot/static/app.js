@@ -1,6 +1,6 @@
 "use strict";
 
-const {scopeModal,identitySection,outputSection,plannerSection,explorationSection,renderPersonaKnowledge,safeKnowledgeURL,explorePersona,renderGroups} = window.MikubotFeatures;
+const {scopeModal,identitySection,timeAwarenessSection,outputSection,plannerSection,explorationSection,renderPersonaKnowledge,safeKnowledgeURL,explorePersona,renderGroups} = window.MikubotFeatures;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];

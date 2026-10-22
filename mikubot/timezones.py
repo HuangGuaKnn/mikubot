@@ -20,6 +20,16 @@ def local_now(settings=None):
     return datetime.now(config_zone(settings))
 
 
+def current_time_context(settings=None, *, now=None):
+    config = settings if isinstance(settings, dict) else settings.get() if settings is not None else {}
+    if not config.get('time', {}).get('awareness_enabled', True):
+        return None
+    zone = config_zone(config)
+    current = (now or datetime.now(timezone.utc)).astimezone(zone)
+    return {'now': current.isoformat(timespec='seconds'), 'timezone': zone.key,
+            'weekday': ('星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日')[current.weekday()]}
+
+
 def day_bounds(settings=None, *, now=None):
     zone = config_zone(settings)
     current = (now or datetime.now(timezone.utc)).astimezone(zone)

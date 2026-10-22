@@ -30,7 +30,7 @@ DEFAULTS = {
     'qq_official': {'enabled': False, 'app_id': '', 'app_secret': '', 'allowed_groups': [], 'allowed_users': [],
                     'chat_policy': 'blacklist', 'blocked_users': [], 'blocked_groups': [], 'max_message_chars': 0},
     'budget': {'daily_tokens': 100000, 'daily_cost': 0.0},
-    'time': {'timezone': 'Asia/Shanghai'},
+    'time': {'timezone': 'Asia/Shanghai', 'awareness_enabled': True},
     'memory': {'semantic_enabled': False, 'embedding_model': '', 'embedding_price': 0.0,
                'top_k': 8, 'auto_review': True, 'organization_enabled': True,
                'term_cache_mb':64, 'read_concurrency':2, 'read_queue_limit':32,
@@ -475,6 +475,8 @@ class Settings:
                 if 'name' in candidate:
                     candidate['name'] = str(candidate['name']).strip()[:80] or candidate['id']
             config_zone(updated)
+            if type(updated['time']['awareness_enabled']) is not bool:
+                raise ValueError('感知现实时间开关须为布尔值')
             routing = updated['routing']
             ids = {x['id'] for x in updated['providers']}
             for key in ('chat', 'planner', 'memory', 'gate', 'summary', 'embedding'):

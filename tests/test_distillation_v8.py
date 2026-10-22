@@ -305,15 +305,15 @@ async def test_budget_whole_run_does_not_reset_between_stages(service):
 
 
 @pytest.mark.anyio
-async def test_search_failures_allow_explicit_source_but_are_recorded(service):
+async def test_explicit_source_bypasses_unavailable_search(service):
     engine, model, _ = service
     async def fail(query):
-        raise ValueError('fixture search unavailable')
+        raise AssertionError('Explicit links must not depend on a working search engine')
     engine.search_fn = fail
     discovery = await engine.discover({'character': '测试人物', 'work': '测试作品', 'source_urls': ['https://wiki.example/character']})
-    assert len(discovery['candidates']) == 1 and len(discovery['failures']) == 3
+    assert len(discovery['candidates']) == 1 and not discovery['failures']
     result = await engine.generate({'mode': 'character', 'discovery_id': discovery['discovery_id'], 'confirmed': True, 'candidate_ids': [discovery['candidates'][0]['id']]})
-    assert sum(source['status'] == 'failed' for source in result['sources']) == 3
+    assert sum(source['status'] == 'failed' for source in result['sources']) == 0
     assert len(model.calls) == 7
 
 

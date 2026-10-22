@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from .settings import resolve_model, resolved_identity
 from .output import OutputLimitError, output_config, split_output
 from .provider import ProviderTimeoutError, ProviderConnectionError, ProviderRateLimitError, is_budget_exceeded
-from .timezones import local_now
+from .timezones import local_now, current_time_context
 
 
 def _value(scope, key, default=None):
@@ -114,6 +114,7 @@ class SocialEngine:
         self._seen = defaultdict(lambda: deque(maxlen=200))
         self._answered = defaultdict(lambda: deque(maxlen=200))
         self._generations = defaultdict(int)
+        self._deliveries = {}
         self._last_request = {}
         self._open_requests = set()
         self._last_topic = {}
@@ -218,17 +219,44 @@ class SocialEngine:
             scored.append(dict(item, context_score=score))
         return sorted(scored, key=lambda item: item['context_score'], reverse=True)[:limit]
 
-    def note_reply(self, scope_id, user_id, source_ids=None):
+    def note_reply(self, scope_id, user_id, source_ids=None, *, generation=None):
         now = time.monotonic()
         self._last_reply[scope_id] = now
         self._participants[(scope_id, str(user_id))] = now
-        self._open_requests.discard((scope_id, str(user_id)))
+        if self.request_current(scope_id, user_id, generation):
+            self._open_requests.discard((scope_id, str(user_id)))
         for message_id in source_ids or []:
             if message_id not in self._answered[scope_id]:
                 self._answered[scope_id].append(message_id)
 
     def request_current(self, scope_id, user_id, generation):
         return generation is None or self._generations[(scope_id, str(user_id))] == generation
+
+    def begin_delivery(self, scope_id, user_id, generation):
+        key = (scope_id, str(user_id))
+        self._deliveries[key] = {'generation': generation, 'current': self._generations[key]}
+
+    def delivery_current(self, scope_id, user_id, generation):
+        key = (scope_id, str(user_id))
+        delivery = self._deliveries.get(key)
+        return bool(delivery is not None and delivery['generation'] == generation
+                    and delivery['current'] == self._generations[key])
+
+    def finish_delivery(self, scope_id, user_id, generation):
+        key = (scope_id, str(user_id))
+        if self._deliveries.get(key, {}).get('generation') == generation:
+            self._deliveries.pop(key, None)
+
+    def _advance_request(self, key, *, interrupt=False):
+        delivery = self._deliveries.get(key)
+        # Ordinary follow-ups queue behind an answer already on the wire. Only
+        # this explicit transition can preserve it; arbitrary invalidation cannot.
+        preserve = delivery is not None and delivery['current'] == self._generations[key] and not interrupt
+        self._generations[key] += 1
+        if preserve:
+            delivery['current'] = self._generations[key]
+        elif delivery is not None:
+            self._deliveries.pop(key, None)
 
     def finish_request(self, scope_id, user_id, generation):
         if self.request_current(scope_id, user_id, generation):
@@ -327,14 +355,14 @@ class SocialEngine:
         if message.get('id') in self._answered[scope_id]:
             return decide('skip', '这条消息已经回应')
         # Stops and superseding requests invalidate in-flight replies even with Planner off.
-        if key in self._open_requests and _interrupt(text) and not _replacement(text):
-            self._generations[key] += 1
+        if (key in self._open_requests or key in self._deliveries) and _interrupt(text) and not _replacement(text):
+            self._advance_request(key, interrupt=True)
             self._last_request.pop(key, None)
             self._open_requests.discard(key)
             return decide('skip', '成员打断了上一请求', interrupted=True)
         replacement = key in self._open_requests and _replacement(text) and not continuation
         if not continuation and (explicit or private or replacement):
-            self._generations[key] += 1
+            self._advance_request(key, interrupt=replacement)
         generation = self._generations[key]
         prior = (self._last_request.get(key) or {}).get('topic', set())
         topic = _topic(text)
@@ -393,7 +421,7 @@ class SocialEngine:
         if message.get('id') in blocked or message.get('id') not in source_ids:
             return decide('skip', '规划来源已删除或失效')
         if not explicit and not private and not replacement:
-            self._generations[key] += 1
+            self._advance_request(key)
             generation = self._generations[key]
         persona = {}
         try:
@@ -425,6 +453,9 @@ class SocialEngine:
                                for x in history],
                    'recent_bot_replies': [x['content'][:300] for x in records if x.get('role') == 'assistant'][-3:]
                       if self.history_fn else self._safe_bot_replies(scope_id, user_id, blocked)}
+        clock = current_time_context(cfg)
+        if clock:
+            payload['current_time'] = clock
         referenced_ids = {x['id'] for x in records if x.get('role') in ('assistant', 'user')} if self.history_fn else source_ids
         self._open_requests.add(key)
         def source_current(fresh=True):
@@ -807,11 +838,12 @@ class ConversationFlow:
         queue_limit = self.settings.get().get('scheduler',{}).get('scope_queue_limit',8)
         if self._scope_jobs[scope_id] >= queue_limit and not extending and not _interrupt(text):
             if explicit:
-                social._generations[key] += 1
+                social._advance_request(key)
             decision = social._decision(scope_id, str(user_id), message, 'skip', '处理数量已满，本轮仅保留观察', explicit=explicit)
             if explicit:
                 await self._emit_failure(scope_id, user_id, '当前正在处理的消息较多，请稍后再试。', message,
                                          decision.get('generation'), metadata, identity)
+                social.finish_request(scope_id, user_id, decision.get('generation'))
             return {'accepted': False, 'code': 'ingress_busy'}
         decision = await social.plan(scope, message, direct=direct, reply_to_bot=reply_to_bot, continuation=extending)
         if extending and decision['reply']:
@@ -894,7 +926,8 @@ class ConversationFlow:
         if not self.allowed(scope_id, user_id) or not scope.get('enabled', True):
             return False
         social = getattr(self.chat, 'social', None) or self._fallback
-        if not social.request_current(scope_id, user_id, batch.get('generation')):
+        if (not social.request_current(scope_id, user_id, batch.get('generation'))
+                and not (batch.get('delivery_started') and social.delivery_current(scope_id, user_id, batch.get('generation')))):
             return False
         if resolved_identity(self.settings.get(), scope) != batch['identity']:
             return False
@@ -929,7 +962,7 @@ class ConversationFlow:
                     and time.monotonic() - social._last_reply.get(scope_id, -float('inf'))
                     < max(0, float(_value(scope, 'cooldown_seconds', 20)))):
                 return False
-            if not social.still_relevant(scope_id, user_id, [x['message']['id'] for x in batch['entries']]):
+            if not batch.get('delivery_started') and not social.still_relevant(scope_id, user_id, [x['message']['id'] for x in batch['entries']]):
                 social._state.setdefault(scope_id, {}).update(suppressed_reason='成员已回应或话题已转移，旧接话已丢弃')
                 return False
         return True
@@ -979,13 +1012,18 @@ class ConversationFlow:
                 await asyncio.sleep(options['interval_ms'] / 1000)
             if not self._may_answer(scope_id, user_id, batch):
                 self.store.add_event('qq_output', '输出期间权限、来源或请求已变化，停止剩余分段',
-                                     scope_id=scope_id, confirmed_parts=confirmed, total_parts=len(parts))
+                                     scope_id=scope_id, confirmed_parts=confirmed, total_parts=len(parts),
+                                     assistant_message_id=batch.get('logical_message_id'), stopped_part=index)
                 return False
+            if not batch.get('delivery_started'):
+                (getattr(self.chat, 'social', None) or self._fallback).begin_delivery(scope_id, user_id, batch.get('generation'))
+                batch['delivery_started'] = True
             delivered = await self.emit(scope_id, part, dict(metadata, assistant_message_id=batch.get('logical_message_id'),
                                                             output_part={'index': index, 'total': len(parts)}))
             if not delivered:
                 self.store.add_event('qq_output', '当前分段未确认送达，剩余分段已停止；不会自动重发',
-                                     scope_id=scope_id, confirmed_parts=confirmed, stopped_part=index, total_parts=len(parts))
+                                     scope_id=scope_id, confirmed_parts=confirmed, stopped_part=index, total_parts=len(parts),
+                                     assistant_message_id=batch.get('logical_message_id'))
                 return False
             confirmed += 1
             batch['confirmed_parts']=confirmed
@@ -1032,7 +1070,7 @@ class ConversationFlow:
                 if result.get('reply') and self._may_answer(scope_id, user_id, batch):
                     delivered = await self._emit_chunks(scope_id, user_id, result['reply'], metadata, batch, result.get('reply_parts'))
                     if delivered:
-                        (getattr(self.chat, 'social', None) or self._fallback).note_reply(scope_id, user_id, ids)
+                        (getattr(self.chat, 'social', None) or self._fallback).note_reply(scope_id, user_id, ids, generation=batch.get('generation'))
                         library=getattr(self.chat,'stickers',None)
                         if library is not None:
                             try:
@@ -1067,6 +1105,7 @@ class ConversationFlow:
                 await self._emit_failure(scope_id, user_id, _failure_feedback(exc), entry['message'],
                                          batch.get('generation'), entry['metadata'], batch.get('identity'))
         finally:
+            (getattr(self.chat, 'social', None) or self._fallback).finish_delivery(scope_id, user_id, batch.get('generation'))
             (getattr(self.chat, 'social', None) or self._fallback).finish_request(scope_id, user_id, batch.get('generation'))
             self._scope_jobs[scope_id] = max(0, self._scope_jobs[scope_id] - 1)
             if self._batches.get(key) is batch:
