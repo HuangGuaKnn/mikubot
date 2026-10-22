@@ -175,11 +175,38 @@ window.MikubotExperience = (() => {
     else if(kind === "distill-search") {
       const sources=String(data.source_urls || "").split(/\r?\n/).map(value=>value.trim()).filter(Boolean);
       if(sources.length>6)throw new Error("最多提供6个资料链接，请每行填写一个。");
-      const body={work:data.work,character:data.character};if(sources.length)body.source_urls=[...new Set(sources)];
-      const result=await api("/api/persona/distill/character/search",{method:"POST",body});
-      distillDraft={...result,mode:"character",work:data.work,character:data.character};showDistillPreview();
+      if(sources.length || (!data.query && data.character)) {
+        if(!data.work)throw new Error("使用自备资料时，请同时填写作品名称。");
+        const body={work:data.work,character:data.character || data.query};if(sources.length)body.source_urls=[...new Set(sources)];
+        const result=await api("/api/persona/distill/character/search",{method:"POST",body});
+        distillDraft={...result,mode:"character",work:data.work,character:data.character || data.query};
+      } else {
+        const result=await api("/api/persona/distill/character/lookup",{method:"POST",body:{query:data.query,work:data.work || ""}});
+        distillDraft={...result,mode:"character"};
+      }
+      showDistillPreview();
     }
-    else if(kind === "distill-start") { if(!data.confirmed)throw new Error("请先确认角色或语料范围。");if(!distillDraft)throw new Error("资料预览已过期，请重新开始。");const selected=name=>$$(`input[name="${name}"]:checked`,form).map(item=>item.value);const payload={mode:distillDraft.mode,confirmed:true,name:data.name || undefined};if(payload.mode === "character"){payload.discovery_id=distillDraft.discovery_id;payload.candidate_ids=selected("candidate_ids");payload.version=data.version;if(!payload.candidate_ids.length)throw new Error("至少选择一个已核对的候选。");}else{payload.upload_id=distillDraft.upload_id;payload.target_speaker=data.target_speaker;payload.selected_files=selected("selected_files");if(!payload.selected_files.length)throw new Error("至少选择一个可读取文件。");}await api("/api/persona/distill/start",{method:"POST",body:payload});closeModal();distillDraft=null;await navigate("jobs");toast("蒸馏任务已创建，可以在后台任务中查看进度。"); }
+    else if(kind === "distill-start") {
+      if(!distillDraft?.lookup_id && !data.confirmed)throw new Error("请先确认角色或语料范围。");
+      if(!distillDraft)throw new Error("资料预览已过期，请重新开始。");
+      const selected=name=>$$(`input[name="${name}"]:checked`,form).map(item=>item.value);
+      const payload={mode:distillDraft.mode,confirmed:true,name:data.name || undefined};
+      if(payload.mode === "character") {
+        payload.version=data.version || "";
+        if(distillDraft.lookup_id) {
+          const character=distillDraft.characters.find(item=>item.id===data.character_id);
+          if(!character)throw new Error("请先选择一个角色。");
+          payload.lookup_id=distillDraft.lookup_id;payload.character_id=character.id;payload.name=data.name || character.name;
+        } else {
+          payload.discovery_id=distillDraft.discovery_id;payload.candidate_ids=selected("candidate_ids");
+          if(!payload.candidate_ids.length)throw new Error("至少选择一个已核对的候选。");
+        }
+      } else {
+        payload.upload_id=distillDraft.upload_id;payload.target_speaker=data.target_speaker;payload.selected_files=selected("selected_files");
+        if(!payload.selected_files.length)throw new Error("至少选择一个可读取文件。");
+      }
+      await api("/api/persona/distill/start",{method:"POST",body:payload});closeModal();distillDraft=null;await navigate("jobs");toast("蒸馏任务已创建，可以在后台任务中查看进度。");
+    }
     else if(kind === "apply-distill") { await api(`/api/persona/distill/${safeId(data.job_id)}/apply`,{method:"POST",body:{name:data.name || undefined,prompt:data.prompt}});closeModal();toast("已保存为人格副本，原人格保留。");await bootstrap();await navigate("persona"); }
     else if(kind === "trial-persona") { const result=await api(`/api/persona/distill/${safeId(data.job_id)}/trial`,{method:"POST",body:{text:data.text}});$("#trial-response").innerHTML=`<div class="trial-response">${e(result.reply || result.message || "未返回试聊内容。")}</div>`; }
     else if(kind === "new-admin") { await api("/api/admins",{method:"POST",body:data});closeModal();toast("管理员账号已添加");await bootstrap(); }

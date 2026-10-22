@@ -8,6 +8,8 @@
 
 项目原创代码使用 [MIT 许可证](LICENSE)，第三方组件及其对应源码说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。当前规范见 [CONTRACT.md](CONTRACT.md)；早期内部版本记录放在 `docs/archive/`。
 
+0.1.4角色流程整合更新：角色蒸馏改为“输入角色名或作品名 → 检索 → 选择角色 → 自动整理资料并蒸馏”，取消常规流程中的资料网页勾选与额外确认开关。本次同步更新0.1.4源码、安装包与便携包，已下载旧包的用户需重新下载，详见[使用指南](docs/USER_GUIDE.md#从作品角色蒸馏)。
+
 ## 下载与选择
 
 前往 **[GitHub Releases 下载0.1.4](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.4)**，展开Assets，按用途选择：

@@ -268,6 +268,48 @@ async def read_public(url):
     return await asyncio.to_thread(_read_public, str(url))
 
 
+def _request_public_json(url, payload=None):
+    """Bounded public API requests with the same DNS pinning as web reads.
+
+    No credentials, cookies or redirects. POST is used only for public search;
+    a redirect must never replay even this small query body to another host.
+    """
+    parsed, host, port, addresses = public_addresses(url)
+    if parsed.scheme != 'https':
+        raise ValueError('资料接口必须使用 HTTPS')
+    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    if body is not None and len(body) > 4096:
+        raise ValueError('资料检索参数过长')
+    connection = _PinnedHTTPS(host, port, addresses[0])
+    path = quote(parsed.path or '/', safe='/%:@!$&\'()*+,;=-._~') + ('?' + parsed.query if parsed.query else '')
+    headers = {'Host': host, 'User-Agent': 'mikubot/0.1 (https://github.com/iownmmiku/mikubot)',
+               'Accept': 'application/json', 'Accept-Encoding': 'identity'}
+    if body is not None:
+        headers['Content-Type'] = 'application/json'
+    try:
+        connection.request('GET' if body is None else 'POST', path, body=body, headers=headers)
+        response = connection.getresponse()
+        if response.status != 200:
+            raise ValueError(f'资料接口返回 HTTP {response.status}')
+        if 'json' not in response.getheader('Content-Type', '').lower():
+            raise ValueError('资料接口未返回 JSON，站点可能需要验证')
+        raw = response.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ValueError('资料接口超过 1MB 读取限制')
+        value = json.loads(raw)
+        if not isinstance(value, (dict, list)):
+            raise ValueError('资料接口返回格式无效')
+        return value
+    except (OSError, http.client.HTTPException, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError('资料接口读取失败或格式无效') from exc
+    finally:
+        connection.close()
+
+
+async def request_public_json(url, payload=None):
+    return await asyncio.to_thread(_request_public_json, str(url), payload)
+
+
 def _domain(host, domain):
     return host == domain or host.endswith('.' + domain)
 

@@ -1,14 +1,15 @@
-﻿param([switch]$PortableOnly, [switch]$InstallerOnly)
+﻿param([switch]$PortableOnly, [switch]$InstallerOnly, [string]$OutputRoot = '')
 $ErrorActionPreference = 'Stop'
 if ($PortableOnly -and $InstallerOnly) { throw 'PortableOnly 与 InstallerOnly 不能同时使用' }
 $taskRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $taskRoot
 $taskPython = Join-Path $taskRoot '.venv\Scripts\python.exe'
 $taskVersion = (& $taskPython -c 'from mikubot import __version__; print(__version__)').Trim()
+$taskArtifactRoot = if ($OutputRoot) { [IO.Path]::GetFullPath((Join-Path $taskRoot $OutputRoot)) } else { Join-Path $taskRoot 'dist' }
 $taskVersionResources = Join-Path $taskRoot ('build\version-v' + $taskVersion)
 $taskAppVersionFile = Join-Path $taskVersionResources 'app.version.txt'
 $taskInstallerVersionFile = Join-Path $taskVersionResources 'installer.version.txt'
-$taskDistributionRoot = Join-Path $taskRoot ('dist\v' + $taskVersion)
+$taskDistributionRoot = Join-Path $taskArtifactRoot ('v' + $taskVersion)
 $taskOutput = Join-Path $taskDistributionRoot 'mikubot'
 $taskExistingData = Join-Path $taskOutput 'data'
 $taskBrandAssets = Join-Path $taskRoot 'mikubot\static\assets\brand'
@@ -52,7 +53,7 @@ foreach ($taskFolder in @('docs', 'evals')) {
 }
 & $taskPython scripts/collect_notices.py $taskOutput
 if ($LASTEXITCODE -ne 0) { throw '依赖声明收集失败' }
-$taskArchive = Join-Path $taskRoot ('dist\mikubot-' + $taskVersion + '-Windows-x64.zip')
+$taskArchive = Join-Path $taskArtifactRoot ('mikubot-' + $taskVersion + '-Windows-x64.zip')
 & $taskPython scripts/package_portable.py $taskOutput $taskArchive
 if ($LASTEXITCODE -ne 0) { throw '便携包封装失败' }
 Write-Output $taskArchive
@@ -63,9 +64,9 @@ if (-not $PortableOnly) {
     $taskInstallerName = 'mikubot-' + $taskVersion + '-Windows-Setup'
     & $taskPython scripts/write_windows_version.py $taskInstallerVersionFile --version $taskVersion --kind installer
     if ($LASTEXITCODE -ne 0) { throw 'Windows 安装器版本资源生成失败' }
-    & $taskPython -m PyInstaller --noconfirm --clean --onefile --windowed --name $taskInstallerName --icon $taskAppIcon --version-file $taskInstallerVersionFile --distpath (Join-Path $taskRoot 'dist') --workpath (Join-Path $taskRoot ('build\setup-v' + $taskVersion)) --add-data ($taskInstallerPayload + ';installer_payload') --add-data ($taskBrandAssets + ';mikubot/static/assets/brand') @taskRuntimeData installer_launcher.py
+    & $taskPython -m PyInstaller --noconfirm --clean --onefile --windowed --name $taskInstallerName --icon $taskAppIcon --version-file $taskInstallerVersionFile --distpath $taskArtifactRoot --workpath (Join-Path $taskRoot ('build\setup-v' + $taskVersion)) --add-data ($taskInstallerPayload + ';installer_payload') --add-data ($taskBrandAssets + ';mikubot/static/assets/brand') @taskRuntimeData installer_launcher.py
     if ($LASTEXITCODE -ne 0) { throw '一键安装包构建失败' }
-    $taskInstaller = Join-Path $taskRoot ('dist\' + $taskInstallerName + '.exe')
+    $taskInstaller = Join-Path $taskArtifactRoot ($taskInstallerName + '.exe')
     foreach ($taskArtifact in @($taskArchive, $taskInstaller)) {
         $taskHash = (Get-FileHash -LiteralPath $taskArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
         [IO.File]::WriteAllText([IO.Path]::ChangeExtension($taskArtifact, '.sha256'), ($taskHash + '  ' + [IO.Path]::GetFileName($taskArtifact) + "`n"), [Text.Encoding]::ASCII)

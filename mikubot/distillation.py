@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 from .corpus import inspect_corpus as scan_corpus, corpus_chunks
 from .provider import estimate_tokens
 from .tools import read_public, search_public
+from .character_catalog import CharacterCatalog
 
 RESOURCE_DIR = Path(__file__).parent / 'resources' / 'csp'
 EXCLUDED_DOMAINS = ('zhihu.com', 'mp.weixin.qq.com', 'baike.baidu.com')
@@ -72,7 +73,7 @@ def _tier(url):
     host = (urlsplit(url).hostname or '').lower()
     if any(host == domain or host.endswith('.' + domain) for domain in ('wikipedia.org', 'moegirl.org.cn', 'moegirl.org', 'fandom.com')):
         return 'wiki_summary'
-    if any(host == domain or host.endswith('.' + domain) for domain in ('bgm.tv', 'anidb.net', 'bilibili.com', 'bestdori.com')):
+    if any(host == domain or host.endswith('.' + domain) for domain in ('bgm.tv', 'bangumi.tv', 'anidb.net', 'bilibili.com', 'bestdori.com')):
         return 'community_database'
     return 'public_unverified'
 
@@ -162,11 +163,12 @@ class _RunBudget:
 
 
 class DistillationService:
-    def __init__(self, provider, data_dir, *, search_fn=None, read_fn=None):
+    def __init__(self, provider, data_dir, *, search_fn=None, read_fn=None, catalog=None):
         self.provider = provider
         self.root = Path(data_dir) / 'distillation'
         self.search_fn = search_fn or search_public
         self.read_fn = read_fn or read_public
+        self.catalog = catalog or CharacterCatalog(read_fn=self.read_fn)
 
     def _path(self, kind, key, suffix='.json'):
         if not isinstance(key, str) or not re.fullmatch(r'[a-f0-9]{32}', key):
@@ -200,6 +202,52 @@ class DistillationService:
     def corpus_inventory(self, upload_id):
         inventory = self._load('uploads', upload_id)
         return {key: value for key, value in inventory.items() if not key.startswith('_')} | {'upload_id': upload_id}
+
+    async def lookup_characters(self, payload):
+        if not isinstance(payload, dict):
+            raise ValueError('角色检索参数无效')
+        query = _text(payload.get('query', ''), '角色名或作品名', 160, required=True)
+        work = _text(payload.get('work', ''), '作品范围', 160)
+        try:
+            result = await asyncio.wait_for(self.catalog.lookup(query, work), 35)
+        except TimeoutError as exc:
+            raise ValueError('角色站点检索超时，请稍后重试或换用完整名称') from exc
+        value = dict(result, query=query, work=work, created_at=_now())
+        lookup_id = self._save('lookups', value)
+        return {**value, 'lookup_id': lookup_id,
+                'characters': [{k: v for k, v in row.items() if not k.startswith('_')}
+                               for row in result['characters']]}
+
+    async def _selected_character(self, payload, budget, progress):
+        lookup = self._load('lookups', payload.get('lookup_id'))
+        selected = next((row for row in lookup['characters'] if row['id'] == payload.get('character_id')), None)
+        if selected is None:
+            raise ValueError('请选择本次检索返回的角色，候选已失效时请重新检索')
+        budget.check()
+        await _progress(progress, 'sources', f'正在自动整理 {selected["name"]} 的角色资料')
+        checkpoint = _CHECKPOINT.get()
+        cached = checkpoint['state'].get('identity_sources') if checkpoint else None
+        if cached is None:
+            pages, failures = await self.catalog.research(selected)
+            budget.check()
+            cached = {'pages': pages, 'failures': failures}
+            if checkpoint:
+                checkpoint['state']['identity_sources'] = cached
+                checkpoint['save'](distillation_cache=checkpoint['state'])
+        candidates = []
+        for page in cached['pages']:
+            url = _public_url(page['url'])
+            text = str(page.get('text') or '')[:16000].strip()
+            if len(text) < 80 or _is_search_page(url):
+                continue
+            candidates.append({'id': _hash(url)[:16], 'title': str(page['title'])[:240], 'url': url,
+                               'source_tier': _tier(url), 'content_hash': _hash(text), '_page': dict(page, text=text)})
+        if not candidates:
+            raise ValueError('已确认角色，但核心站点暂无足够可读取资料；请稍后重试，未调用蒸馏模型')
+        return {'character': selected['name'], 'work': lookup.get('work') or selected['work'],
+                'aliases': selected.get('aliases', []),
+                'created_at': lookup['created_at'], 'candidates': candidates,
+                'failures': lookup.get('failures', []) + cached['failures']}
 
     async def discover(self, payload, progress=None, cancel_check=None):
         if not isinstance(payload, dict):
@@ -348,7 +396,8 @@ class DistillationService:
         if payload.get('mode') == 'corpus':
             fingerprints.append(self._load('uploads', payload.get('upload_id')))
         elif payload.get('mode') == 'character':
-            fingerprints.append(self._load('discoveries', payload.get('discovery_id')))
+            fingerprints.append(self._load('lookups' if payload.get('lookup_id') else 'discoveries',
+                                           payload.get('lookup_id') or payload.get('discovery_id')))
         fingerprint = _hash(json.dumps(fingerprints,sort_keys=True,ensure_ascii=False))
         if state and state.get('fingerprint') != fingerprint:
             raise ValueError('材料、模型或任务参数已经变化，请新建任务；未复用旧检查点')
@@ -473,10 +522,12 @@ class DistillationService:
     async def _generate_character(self, payload, budget, scope_id, progress):
         if budget.max_calls < 7:
             raise ValueError('角色蒸馏至少需要 7 次模型调用，请提高任务上限后开始')
-        discovery = self._load('discoveries', payload.get('discovery_id'))
+        automatic_sources = bool(payload.get('lookup_id'))
+        discovery = (await self._selected_character(payload, budget, progress) if automatic_sources
+                     else self._load('discoveries', payload.get('discovery_id')))
         character, work = discovery['character'], discovery['work']
         version = _text(payload.get('version', ''), '采用版本／时间线', 240)
-        ids = payload.get('candidate_ids')
+        ids = [row['id'] for row in discovery['candidates']] if automatic_sources else payload.get('candidate_ids')
         if not isinstance(ids, list) or not ids or any(not isinstance(x, str) for x in ids):
             raise ValueError('请至少选择一份已确认的角色资料')
         by_id = {item['id']: item for item in discovery['candidates']}
@@ -488,7 +539,7 @@ class DistillationService:
             budget.check()
             await _progress(progress, 'sources', '正在核对已确认的角色资料', index, len(selected))
             checkpoint = _CHECKPOINT.get()
-            page = checkpoint['state']['pages'].get(candidate['url']) if checkpoint else None
+            page = candidate.get('_page') if automatic_sources else (checkpoint['state']['pages'].get(candidate['url']) if checkpoint else None)
             if page is None:
                 page = await self.read_fn(candidate['url'])
                 if checkpoint:
@@ -548,7 +599,7 @@ class DistillationService:
                    'cross_validation': 'requires_human_review', 'model_quality_score': None,
                    'warnings': ['结构完整不代表行为、台词或事实已验证；请审阅研究与来源后应用人格。']}
         manifest = {'schema_version': '1.0', 'name': 'character-' + uuid.uuid4().hex[:12], 'character': character,
-                    'work': work, 'aliases': [], 'version': version, 'generated_at': now,
+                    'work': work, 'aliases': discovery.get('aliases', []), 'version': version, 'generated_at': now,
                     'research_started_at': discovery['created_at'], 'research_completed_at': now,
                     'latest_source_checked_at': now, 'covered_until': {'date': date, 'description': '用户确认的公开网页正文'},
                     'covered_media': ['用户确认的网页资料'], 'not_covered': ['未确认来源、未提供媒体、未来更新'],

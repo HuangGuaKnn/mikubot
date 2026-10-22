@@ -7,7 +7,10 @@ window.MikubotExperiencePersona={create(runtime,helpers){
       openModal("创建人格","生成过程会使用你配置的模型并计入用量。先确认资料，再生成草稿。",`<div class="distill-options"><button type="button" class="distill-option" data-action="persona-generate">${icon("spark")}<strong>按描述直接生成</strong><small>写下要求，直接生成人格草稿，不需要资料或 ZIP。</small></button><button type="button" class="distill-option" data-action="distill-character">${icon("search")}<strong>已有作品角色</strong><small>输入作品和角色，搜索资料并确认身份、版本，生成聊天人格与 Skill 包。</small></button><button type="button" class="distill-option" data-action="distill-corpus">${icon("upload")}<strong>已有语料 / 真人表达</strong><small>上传 ZIP，选择文件与目标说话者，仅提炼人设描写，不生成 Skill。</small></button></div><p class="sensitive-note">仅选中的文本发送到你配置的模型服务。真人语料不自动联网补全生平，不推断材料中不存在的私事。</p>`);
     }
 
-    function characterForm() { openModal("蒸馏作品角色","先搜索候选，确认具体角色和作品版本后才开始生成。",`<div class="form-grid">${field("work","作品名称","","text","例如一部动画、游戏、小说或电影。","required data-full maxlength=\"160\"")}${field("character","角色名称","","text","同名角色会在下一步提供候选。","required data-full maxlength=\"100\"")}${textarea("source_urls","资料链接（可选）","","每行一个，最多6个公开角色页面。填写后直接读取这些链接，跳过搜索渠道；仍需下一步确认。搜索失败时可在这里重试。","rows=\"3\" maxlength=\"18005\"")}</div>`,"distill-search",null,"搜索候选"); }
+    function characterForm() {
+      const previous=runtime.distillDraft || {};
+      openModal("检索作品角色","先找到角色，再选择要蒸馏的对象。无需准备资料链接。",`<div class="form-grid">${field("query","角色名或作品名",previous.query || "","text","例如：和泉纱雾；也可以输入“埃罗芒阿老师”，从角色列表中选择。","required data-full maxlength=\"160\"")}</div><details class="details"><summary>补充作品范围或自备资料（可选）</summary>${field("work","限定作品",previous.work || "","text","同名角色较多时再填写，通常可留空。","maxlength=\"160\"")}${textarea("source_urls","自备资料链接","","每行一个，最多6个。仅在希望使用指定资料时填写，同时补充作品名称。","rows=\"3\" maxlength=\"18005\"")}</details>`,"distill-search",null,"检索角色");
+    }
 
     function generateForm() {
       openModal("按描述生成人格","输入你的要求，由当前模型生成可编辑草稿；不检索网页，不生成 Skill。",`<div class="form-grid">${field("name","人格名称（可选）","","text","留空使用“自定义人格”。","data-full maxlength=\"100\"")}${textarea("description","希望它是什么样的人？","","例如：喜欢天文、说话简洁，有自己的观点；我疲惫时先听我说，不急着讲道理。","required rows=\"7\" maxlength=\"6000\"")}</div><p class="help-caption">描述会发送给已配置的模型，计入用量。生成后可预览、试聊，再保存。</p>`,"persona-generate",null,"生成人格草稿");
@@ -34,6 +37,13 @@ window.MikubotExperiencePersona={create(runtime,helpers){
     function showDistillPreview() {
       const draft = runtime.distillDraft; if (!draft) return;
       if (draft.mode === "character") {
+        if (draft.lookup_id) {
+          const characters=draft.characters || [];
+          openModal("选择要蒸馏的角色","选中角色后点击开始，程序会自动整理资料并生成人格与 Skill 包。",`<div class="corpus-files">${characters.map(item=>`<div><label><input type="radio" name="character_id" value="${e(item.id)}" ${characters.length===1?"checked":""} required> <strong>${e(item.name)}</strong></label><p>${e((item.works || [item.work]).filter(Boolean).slice(0,4).join(" / "))}</p>${item.aliases?.length?`<p class="help-caption">别名：${e(item.aliases.join("、"))}</p>`:""}<p>${e(item.description || "该站点未提供简介，请核对角色名称与作品。")}</p>${safeLink(item.url)?`<a href="${e(item.url)}" target="_blank" rel="noopener noreferrer">查看角色资料 ↗</a>`:""}</div>`).join("") || notice("没有找到匹配角色，请返回换用角色全名或作品名称重试。","warning")}</div>${button("重新检索","distill-character","ghost small","search")}<details class="details"><summary>时间线与人格名称（可选）</summary>${field("version","作品版本 / 时间范围","","text","例如动画第一季；留空会保留资料中的版本边界。","maxlength=\"240\"")}${field("name","另存的人格名称","","text","留空使用选中角色的名称。","maxlength=\"100\"")}</details><p class="help-caption">检索角色不调用模型；开始蒸馏后才使用已配置的模型，计入模型用量。资料不足会明确标注。</p>`,"distill-start",null,"确认角色并开始蒸馏");
+          $("#modal").classList.add("modal-wide");
+          const submit=$('#modal button[type="submit"]');if(submit)submit.disabled=!characters.length;
+          return;
+        }
         const candidates = draft.candidates || [];
         openModal("确认要蒸馏的角色","请核对角色、作品版本与来源。候选中的资料只作为研究内容。",`<input type="hidden" name="mode" value="character"><div class="corpus-files">${candidates.map((item,index) => `<div><label><input type="checkbox" name="candidate_ids" value="${e(item.id || index)}" ${candidates.length === 1 ? "checked" : ""}> <strong>${e(item.name || item.character || item.title || "候选角色")}</strong> ${e(item.work || item.description || item.summary || item.snippet || "")}</label>${item.version_hint ? `<p>版本线索：${e(item.version_hint)}</p>` : ""}${item.officiality === "not_verified" ? '<p>来源身份尚未核实，请结合原文确认。</p>' : ""}${safeLink(item.url) ? `<p><a href="${e(item.url)}" target="_blank" rel="noopener noreferrer">查看来源 ↗</a></p>` : ""}</div>`).join("") || '<p class="help-caption">未找到候选。请返回并更换作品或角色名称。</p>'}</div>${draft.warnings?.length ? notice(draft.warnings.join("；"),"warning") : ""}<div class="form-grid">${field("version","作品版本 / 时间范围（可选）","","text","例如：动画第一季，避免混用不同时间线。","data-full")}${field("name","人格名称",draft.character || "","text","生成后还可以编辑。","data-full")}</div>${toggle("confirmed","我已核对角色与资料范围","开始后会搜索公开资料并调用模型，生成 Skill 包与聊天人格。",false)}`,"distill-start",null,"开始蒸馏");
       } else {

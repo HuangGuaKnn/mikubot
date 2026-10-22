@@ -74,6 +74,18 @@ async function main(){
   const searched=calls.length;
   await assert.rejects(ui.handleSubmit("distill-search",{values:{work:"作品",character:"角色",source_urls:Array.from({length:7},(_,i)=>"https://example.test/"+i).join("\n")}}),/最多提供6个/);
   assert.equal(calls.length,searched);
+  responder=async()=>({lookup_id:"lookup-fixture",query:"埃罗芒阿老师",characters:[{id:"bgm-22520",name:"和泉纱雾",works:["埃罗芒阿老师"],aliases:["和泉 紗霧"],description:"<script>bad</script>",url:"https://bgm.tv/character/22520"},{id:"bgm-22521",name:"和泉正宗",works:["埃罗芒阿老师"]}]});
+  await ui.handleSubmit("distill-search",{values:{query:"埃罗芒阿老师"}});
+  assert.equal(calls.at(-1)[0],"/api/persona/distill/character/lookup");
+  assert.match(modal[2],/type="radio" name="character_id"/);
+  assert.ok(!modal[2].includes('name="confirmed"'));
+  assert.ok(!modal[2].includes('name="candidate_ids"'));
+  assert.match(modal[2],/&lt;script&gt;/);
+  const lookedUp=calls.length;
+  await assert.rejects(ui.handleSubmit("distill-start",{values:{character_id:"forged"}}),/选择一个角色/);
+  assert.equal(calls.length,lookedUp);
+  await ui.handleSubmit("distill-start",{values:{character_id:"bgm-22520"}});
+  assert.deepEqual(plain(calls.at(-1)),["/api/persona/distill/start",{method:"POST",body:{mode:"character",confirmed:true,name:"和泉纱雾",version:"",lookup_id:"lookup-fixture",character_id:"bgm-22520"}}]);
   await ui.handleSubmit("time-awareness",{values:{awareness_enabled:false,timezone:"Asia/Hong_Kong"}});
   assert.deepEqual(plain(calls.at(-1)),["/api/settings",{method:"PUT",body:{time:{awareness_enabled:false,timezone:"Asia/Hong_Kong"}}}]);
 

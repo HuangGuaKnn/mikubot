@@ -346,6 +346,10 @@ def install_experience(app, store, settings, provider, chat, router, data_dir, r
             raise ValueError('任务完成后文件已变化，请在工作目录检查当前版本')
         return FileResponse(path, filename=path.name)
 
+    @app.post('/api/persona/distill/character/lookup')
+    async def lookup_character(payload: dict = Body(...)):
+        return await distillation.lookup_characters(payload)
+
     @app.post('/api/persona/distill/character/search')
     async def search_character(payload: dict = Body(...)):
         try:

@@ -335,6 +335,19 @@ def test_character_distillation_returns_persona_and_downloadable_skill(experienc
     assert len(require_ok(client.get("/api/personas"))) == 1
 
 
+def test_character_lookup_is_authenticated_and_does_not_start_paid_work(experience, monkeypatch):
+    client, app = experience
+    async def lookup(query, work):
+        return {'characters': [{'id': 'bgm-22520', 'name': '和泉纱雾', '_page': {'text': 'private evidence'}}], 'failures': [], 'warnings': []}
+    monkeypatch.setattr(app.state.distillation.catalog, 'lookup', lookup)
+    result = require_ok(client.post('/api/persona/distill/character/lookup', json={'query': '和泉纱雾'}))
+    assert result['lookup_id'] and '_page' not in result['characters'][0]
+    assert require_ok(client.get('/api/jobs')) == []
+    assert client.post('/api/persona/distill/character/lookup', json={'query': ''}).status_code == 400
+    client.cookies.clear()
+    assert client.post('/api/persona/distill/character/lookup', json={'query': '和泉纱雾'}).status_code == 401
+
+
 def test_incomplete_distillation_cannot_apply_trial_or_download(experience, monkeypatch):
     client, app = experience
     async def generate(payload, progress, cancel_check, **kwargs):
