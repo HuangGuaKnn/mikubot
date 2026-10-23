@@ -1,6 +1,6 @@
 # mikubot 源码部署指南
 
-本文描述0.1.4源码部署，安装包、便携包与源码在[GitHub Releases](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.4)按实际公开资产下载。端口告警与 `--strict-port` 从本版提供；完整隔离、HTTPS、Linux/Docker步骤与验收范围见[部署与安全说明](DEPLOYMENT_AND_SAFETY.md)。
+本文描述0.1.5源码部署，安装包、便携包与源码在[GitHub Releases](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.5)按实际公开资产下载。端口告警与 `--strict-port` 从本版提供；完整隔离、HTTPS、Linux/Docker步骤与验收范围见[部署与安全说明](DEPLOYMENT_AND_SAFETY.md)。
 
 ## Windows：一条命令准备并启动
 

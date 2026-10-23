@@ -1,6 +1,6 @@
-# mikubot 0.1.4 集成约定
+# mikubot 0.1.5 集成约定
 
-本文描述0.1.4源码集成约定，版本发布与下载以GitHub实际公开资产为准；旧版不保证具备本版新增接口。
+本文描述0.1.5源码集成约定，版本发布与下载以GitHub实际公开资产为准；旧版不保证具备本版新增接口。
 
 本文供当前源码开发与接入使用，运行时校验以 `mikubot/api.py`、`experience_api.py` 及对应服务为准。历史内部版本说明归档于 `docs/archive/`，不覆盖当前约定。产品名与核心包均为 `mikubot`；`qunyu` 仅为旧导入和启动兼容层，计划在 **0.3.0** 移除，新集成应直接使用 `mikubot`。
 
@@ -52,7 +52,8 @@ Python 3.11–3.13（推荐3.12），FastAPI、SQLite；正式入口为 `python 
 
 - `/api/plugins`：已认证本地管理员查看清单与保存草稿；`/{id}`读取或删除；`PUT /{id}/enabled`显式启停；`POST /{id}/run`仅运行已启用版本。聊天仅在认证的本地管理员、web会话、电脑能力与会话工具均允许时提供生成/运行工具；QQ不能经此入口创建代码。
 - `/api/statistics?days=1|3|7`：有界SQL聚合与真实进程采样；未采集指标为null，不伪造首字延迟或价格。
-- `/api/updates/apply {release_id}`：真正本机连接、Windows安装版、启动器可退出且无活动任务/模型请求时启动一键流程；仅固定仓库已发布文件，校验后静默交接。源码和便携版手动部署。
+- `/api/updates/switch {release_id}`：直接替换程序并重启。需启动器可退出、无活动任务/模型请求、固定仓库资产校验通过；远程需由宿主设置 updates.allow_remote。独立助手备份数据及旧程序，健康检查失败后安全停止并回退。源码本地改动与未经声明的降级拒绝覆盖，容器通过镜像更新。
+- `/api/updates/apply {release_id}`：旧安装器更新兼容接口，保留给旧版安装流程；新界面优先使用 switch。
 - `time.timezone`：IANA时区，默认Asia/Shanghai；日预算、Planner、表情配额与统计用同一自然日。
 
 

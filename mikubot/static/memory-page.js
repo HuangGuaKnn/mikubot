@@ -17,9 +17,9 @@ function memoryCard(item,candidate = false) {
 
 async function renderMemoryRecords() {
   const candidate = state.filters.status === "pending";
-  const key=JSON.stringify([state.scope,state.filters.status || "",state.filters.q || ""]);
+  const key=JSON.stringify([state.learningAll,state.scope,state.filters.status || "",state.filters.q || ""]);
   if(state.memoryPage?.key !== key)state.memoryPage={key,offset:0};
-  const params={scope_id:state.scope,q:state.filters.q,status:candidate?undefined:state.filters.status,limit:50,offset:state.memoryPage.offset};
+  const params={scope_id:state.learningAll?undefined:state.scope,q:state.filters.q,status:candidate?undefined:state.filters.status,limit:50,offset:state.memoryPage.offset};
   const page=await api(`${candidate?"/api/memory/candidates":"/api/memories"}?${query(params)}`);
   state.records=rows(page);state.memoryMeta=page;
   if(page.total && state.memoryPage.offset>=page.total){state.memoryPage.offset=Math.floor((page.total-1)/50)*50;return renderMemoryRecords();}
@@ -27,7 +27,7 @@ async function renderMemoryRecords() {
   return heading("LITTLE THINGS, WELL REMEMBERED","记忆档案","记得住，也记得准。让每段记忆有出处、可审核、能纠正。",button("检索试验","go-knowledge","","search") + button("记住一件事","new-memory","primary","plus")) + listToolbar("搜索内容、人物或关键词",[["","全部"],["active","有效"],["pending","待确认"],["archived","归档"],["superseded","已替代"],["rejected","未接纳"]]) + notice(candidate ? "自动提取的候选还不会用于回答。审核时可查看来源与可能冲突，决定保留旧事实还是用新记忆替代。" : "记忆默认按会话与用户范围隔离；加入共享空间且显式允许的群可见条目可以互通。新事实和纠错可以分开处理；被替代、归档与未接纳的内容不参与正常召回。") + (state.records.length ? `<div class="record-grid">${state.records.map(item => memoryCard(item,candidate)).join("")}</div>` : empty(candidate ? "shield" : "memory",candidate ? "没有待审核的记忆" : "值得记住的事，还在路上",candidate ? "开启自动记忆后，提取出的事实与偏好会来到这里。明确说“记住”仍可直接保存。" : "告诉它你的偏好，或手动添加一段记忆。也可以从知识页导入本地资料。",candidate ? "go-chat" : "new-memory",candidate ? "去聊一聊" : "添加第一条记忆")) + pager;
 }
 
-async function renderMemory() { const [base,panel] = await Promise.all([renderMemoryRecords(),window.MikubotFeatures.memoryToolsPanel()]); return base.replace('<div class="toolbar">',panel + '<div class="toolbar">'); }
+async function renderMemory() { const [base,panel,dashboard,delivery] = await Promise.all([renderMemoryRecords(),window.MikubotFeatures.memoryToolsPanel(),window.MikubotLearning?.panel("memory"),window.MikubotLearning?.deliveryPanel()]); return base.replace('<div class="toolbar">',(dashboard||"")+(delivery||"")+panel + '<div class="toolbar">'); }
 
 async function reviewMemoryBase(item) {
   const conflicts = rows(await api(`/api/memories/${encodeURIComponent(item.id)}/conflicts`));

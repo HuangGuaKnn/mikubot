@@ -34,7 +34,8 @@ DEFAULTS = {
     'memory': {'semantic_enabled': False, 'embedding_model': '', 'embedding_price': 0.0,
                'top_k': 8, 'auto_review': True, 'organization_enabled': True,
                'term_cache_mb':64, 'read_concurrency':2, 'read_queue_limit':32,
-               'semantic_timeout_seconds':8, 'background_indexing':True},
+               'semantic_timeout_seconds':8, 'background_indexing':True,
+               'review_mode':'automatic','extraction_messages':6,'extraction_idle_seconds':180,'daily_extractions':60},
     'planner': {'min_interval_ms':1200, 'daily_calls':300, 'daily_tokens':12000, 'max_age_ms':15000,
                 'group_batch_ms':1500,'group_batch_messages':4},
     'stickers': {'enabled':True,'collect_enabled':True,'collect_probability':0.1,'send_enabled':True,
@@ -58,6 +59,8 @@ DEFAULTS = {
     'context': {'enabled': False, 'trigger_messages': 60, 'max_chars': 18000, 'keep_recent': 24,
                 'max_input_chars':80000, 'max_history_messages':400, 'max_images':3},
     'paused': False,
+    'updates': {'allow_remote':False},
+    'language': {'learning_enabled':True,'group_isolation':False,'review_mode':'automatic'},
 }
 
 PROVIDER_DEFAULTS = dict(DEFAULTS['model'], id='', name='', enabled=True, tools=True, source_id='', model_type='')
@@ -477,6 +480,15 @@ class Settings:
                 if 'name' in candidate:
                     candidate['name'] = str(candidate['name']).strip()[:80] or candidate['id']
             config_zone(updated)
+            memory_policy=updated['memory']
+            if memory_policy['review_mode'] not in ('automatic','manual'):raise ValueError('记忆审核模式须为 automatic 或 manual')
+            language=updated['language']
+            if type(language['learning_enabled']) is not bool or type(language['group_isolation']) is not bool:raise ValueError('黑话学习与隔离开关须为布尔值')
+            if language['review_mode'] not in ('automatic','manual'):raise ValueError('黑话审核模式须为 automatic 或 manual')
+            for key,low,high in (('extraction_messages',2,50),('extraction_idle_seconds',30,3600),('daily_extractions',0,1000)):
+                if type(memory_policy[key]) is not int or not low<=memory_policy[key]<=high:raise ValueError('自动记忆整理参数无效')
+            if type(updated['updates']['allow_remote']) is not bool:
+                raise ValueError('远程更新开关须为布尔值')
             if type(updated['time']['awareness_enabled']) is not bool:
                 raise ValueError('感知现实时间开关须为布尔值')
             routing = updated['routing']

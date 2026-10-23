@@ -105,8 +105,8 @@ function renderNavigation() {
   $("#sidebar-status-text").textContent = state.settings.paused ? "已暂停自动回复" : modelReady ? "本地服务已就绪" : "等待配置模型";
   $("#sidebar-status-sub").textContent = modelReady ? (configuredModel().model || "你的数据，留在你的电脑") : "连接模型即可开始聊天";
   $("#version-label").textContent = state.boot?.version || "0.1";
-  $("#workspace-version").textContent = state.boot?.version || "0.1.4";
-  if ($("#header-version")) $("#header-version").textContent = "v" + (state.boot?.version || "0.1.4");
+  $("#workspace-version").textContent = state.boot?.version || "0.1.5";
+  if ($("#header-version")) $("#header-version").textContent = "v" + (state.boot?.version || "0.1.5");
   const portWarning = $("#port-warning"), listener = state.boot?.listener;
   if (portWarning) {
     portWarning.hidden = !listener?.port_changed;
@@ -225,6 +225,7 @@ async function saveModal(kind,form) {
   else if (kind === "persona") { endpoint = "/api/personas"; payload = {...data,interests:splitNames(data.interests),excluded_topics:splitNames(data.excluded_topics),exploration:{}}; for (const key of ["interval_hours","daily_searches","valid_days"]) { payload.exploration[key] = data["explore_"+key] === "" ? null : Number(data["explore_"+key]); delete payload["explore_"+key]; } }
   else if (kind === "scope") { endpoint = "/api/scopes"; payload = {...data,bot_aliases:splitNames(data.bot_aliases)}; if (!payload.id) delete payload.id; for (const key of ["cooldown_seconds","merge_window_ms","followup_seconds","daily_tokens"]) payload[key] = Number(data[key]); for (const key of ["trigger_at","trigger_reply","trigger_name","plan_enabled","proactive_reply"]) payload[key] = data[key] === "" ? null : data[key] === "true"; for (const key of ["planner_min_interval_ms","planner_daily_calls","planner_daily_tokens","planner_max_age_ms"]) payload[key] = data[key] === "" ? null : Number(data[key]); payload.output = data.output_override ? Object.fromEntries(["enabled","mode","target_chars","max_chars","platform_max_chars","interval_ms","max_parts","reply_max_chars","message_max_chars","remove_parentheses"].map(key => [key,["enabled","remove_parentheses"].includes(key) ? !!data["out_"+key] : key === "mode" ? (data.out_mode || "model") : Number(data["out_"+key] ?? (["reply_max_chars","message_max_chars"].includes(key) ? 0 : undefined))])) : null; for (const key of Object.keys(payload)) if (key.startsWith("out_") || key === "output_override") delete payload[key]; for (const key of Object.keys(item || {})) if (key.startsWith("output_")) payload[key] = null; if (item?.settings?.output || Object.keys(item?.settings || {}).some(key => key.startsWith("output_"))) payload.settings = {output:null,...Object.fromEntries(Object.keys(item.settings).filter(key => key.startsWith("output_")).map(key => [key,null]))}; }
   else return;
+  if (kind === "persona") { payload.profile = {}; for (const key of ["residence","occupation","age","birthday","routine","background","relationship"]) { payload.profile[key] = data["profile_"+key] ?? item?.profile?.[key] ?? ""; delete payload["profile_"+key]; } }
   if (kind === "scope") {
     const inherited = ['persona_id','model_id','activity','trigger_at','trigger_reply','trigger_name','plan_enabled','proactive_reply','always_reply','allow_tools','allow_mcp','use_persona_knowledge'];
     if (item?.profile_id != null) for (const key of inherited) if (payload[key] === item[key]) delete payload[key];
@@ -298,6 +299,7 @@ document.addEventListener("click",async event => {
   const target = event.target.closest("[data-action]"); if (!target || target.disabled) return;
   const action = target.dataset.action, id = target.dataset.id, item = state.records.find(record => record.id === id);
   try {
+    if (await window.MikubotLearning?.handleAction(action,target)) return;
     if (await window.MikubotEmbedding?.handleAction(action,target)) return;
     if (await window.MikubotPages.handleAction(action,target)) return;
     if (await window.MikubotExperience.handleAction(action,target)) return;
@@ -388,6 +390,7 @@ document.addEventListener("submit",async event => {
   const submit = $('[type="submit"]',form); if (submit) submit.disabled = true;
   if ($("#modal-error",form)) $("#modal-error",form).hidden = true;
   try {
+    if (await window.MikubotLearning?.handleSubmit(kind,form)) return;
     if (await window.MikubotPages.handleSubmit(kind,form)) return;
     if (await window.MikubotEmbedding?.handleSubmit(kind,form)) return;
     if (await window.MikubotExperience.handleSubmit(kind,form)) return;

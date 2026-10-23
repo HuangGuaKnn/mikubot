@@ -59,11 +59,20 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
 
     @asynccontextmanager
     async def lifespan(app):
-        if start_workers:
+        async def start_when_ready():
+            while app.state.updates.startup_pending():
+                provider._updating = True
+                await asyncio.sleep(.25)
+            provider._updating = False
             await reconnect()
             await scheduler.start()
             await chat.knowledge.start()
+            await chat.memory_lifecycle.start()
+        starter = asyncio.create_task(start_when_ready()) if start_workers else None
         yield
+        if starter:
+            starter.cancel()
+            with contextlib.suppress(asyncio.CancelledError): await starter
         await app.state.updates.close()
         await app.state.runs.close()
         await scheduler.stop()
@@ -77,6 +86,10 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
     app.state.store, app.state.settings, app.state.chat = store, settings, chat
     app.state.provider, app.state.bridge, app.state.scheduler = provider, router, scheduler
     app.state.onebot, app.state.official = onebot, official
+    from .learning_dashboard import install_learning_dashboard
+    from .delivery import install_delivery
+    install_learning_dashboard(app,store,settings)
+    install_delivery(app,store,onebot,official)
     from .work_limits import WorkLimiter, WorkBusy
     inbound = WorkLimiter(settings, 'request', 8, 16)
     parsing = WorkLimiter(settings, 'parsing', 1, 4)
@@ -156,6 +169,9 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
                     return JSONResponse({'detail': '远程访问需要先在本机设置密码'}, status_code=403)
                 if not auth_http.authenticated(request):
                     return JSONResponse({'detail': '请登录 mikubot；登录可能已失效', 'code':'authentication_required'}, status_code=401)
+            updating = getattr(provider, '_updating', False) or app.state.updates.startup_pending()
+            if updating and not (request.url.path.startswith('/api/updates') or request.url.path in ('/api/auth/status','/api/auth/login','/api/auth/logout','/api/shutdown')):
+                return JSONResponse({'detail':'正在切换版本并检查启动状态，请稍后重试','code':'update_in_progress'},status_code=503)
             if request.method in ('POST','PUT','PATCH'):
                 raw = bytearray()
                 async for chunk in request.stream():
@@ -164,8 +180,6 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
                         return JSONResponse({'detail': '请求体超过大小限制'}, status_code=413)
                 request._body = bytes(raw)
         is_api = request.url.path.startswith('/api/')
-        if is_api and getattr(provider, '_updating', False) and request.method != 'GET':
-            return JSONResponse({'detail': '正在退出并安装更新，请等待软件重新打开'}, status_code=503)
         exclusive = request.url.path == '/api/backup/restore'
         if is_api:
             async with request_gate:
@@ -259,7 +273,9 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         return set_autostart(payload['autostart'], data_dir)
 
     @app.put('/api/settings')
-    async def put_settings(payload: dict = Body(...)):
+    async def put_settings(request: Request, payload: dict = Body(...)):
+        if 'updates' in payload and not local_peer(request):
+            raise HTTPException(403,'远程更新授权只能在运行电脑上调整')
         if 'webui' in payload and not isinstance(payload['webui'], dict):
             raise ValueError('WebUI设置须为对象')
         if (payload.get('webui') or {}).get('remote_enabled') is True and auth_http.auth.status()['mode'] != 'password':
@@ -442,6 +458,13 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
             if not isinstance(data['interests'], list) or len(data['interests']) > 12 or any(not isinstance(x, str) or not 1 <= len(x.strip()) <= 80 for x in data['interests']):
                 raise ValueError('兴趣最多 12 项，每项 1—80 字')
             data['interests'] = list(dict.fromkeys(x.strip() for x in data['interests']))
+        if 'profile' in data:
+            profile=data['profile']
+            if not isinstance(profile,dict) or set(profile)-{'residence','occupation','age','birthday','routine','background','relationship'}:
+                raise ValueError('人格资料字段无效')
+            if any(not isinstance(value,str) or len(value)>500 for value in profile.values()) or sum(map(len,profile.values()))>2000:
+                raise ValueError('人格资料每栏最多500字，合计最多2000字')
+            data['profile']={key:value.strip() for key,value in profile.items() if value.strip()}
         if 'exploration_enabled' in data and type(data['exploration_enabled']) is not bool:
             raise ValueError('定期探索开关须为布尔值')
         if 'excluded_topics' in data:
@@ -625,7 +648,7 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         return store.update_memory(id, payload)
 
     @app.get('/api/memory/candidates')
-    async def memory_candidates(scope_id: str = 'web:default', q: str = '', limit: int | None = None, offset: int = 0):
+    async def memory_candidates(scope_id: str | None = None, q: str = '', limit: int | None = None, offset: int = 0):
         if limit is None:
             return await asyncio.to_thread(store.list_memories, scope_id=scope_id, q=q, status='pending')
         return await asyncio.to_thread(store.memory_page, scope_id, q, 'pending', limit=limit, offset=offset)
@@ -718,7 +741,20 @@ def create_app(data_dir=None, *, start_workers=True, allow_remote=False):
         return {**result, 'message': messages.get(result.get('reason'), '本次没有需要整理的旧对话，保留原文。')}
 
     @app.get('/api/jargon')
-    async def jargon(scope_id: str | None = None, q: str = '', status: str | None = None): return [x for x in store.list_jargon(scope_id=scope_id, q=q, status=status) if x.get('entry_type', 'jargon') != 'expression']
+    async def jargon(scope_id: str | None = None, q: str = '', status: str | None = None, limit:int|None=None,offset:int=0):
+        if limit is None:return [x for x in store.list_jargon(scope_id=scope_id,q=q,status=status) if x.get('entry_type','jargon')!='expression']
+        if not 1<=limit<=100 or offset<0 or offset>10000000:raise ValueError('词典分页参数无效')
+        clauses=["status<> 'deleted'","COALESCE(json_extract(data,'$.entry_type'),'jargon')='jargon'"];args=[]
+        if scope_id:clauses.append('scope_id=?');args.append(scope_id)
+        if status:clauses.append('status=?');args.append(status)
+        if q:clauses.append("(instr(term,?)>0 OR instr(json_extract(data,'$.meaning'),?)>0)");args.extend([q,q])
+        where=' AND '.join(clauses)
+        def page():
+            with store._lock:
+                total=store._conn.execute('SELECT COUNT(*) FROM jargon WHERE '+where,args).fetchone()[0]
+                items=[json.loads(r[0]) for r in store._conn.execute('SELECT data FROM jargon WHERE '+where+' ORDER BY updated_at DESC,id LIMIT ? OFFSET ?',[*args,limit,offset])]
+            return {'items':items,'total':total,'offset':offset,'has_more':offset+limit<total,'next_offset':offset+limit}
+        return await asyncio.to_thread(page)
 
     @app.get('/api/expressions')
     async def expressions(scope_id: str | None = None, status: str | None = None):

@@ -62,10 +62,11 @@ async def _receive_chat(client, url, payload, headers, *, first_token_seconds, c
 
         content, calls, usage = [], {}, {}
         finished, done, size, events, preview_blocked = False, False, 0, 0, False
+        finish_reason = None
         decoder, buffer, data_lines = codecs.getincrementaldecoder('utf-8-sig')('strict'), '', []
 
         def event():
-            nonlocal finished, done, usage, first_token_ms, events, preview_blocked
+            nonlocal finished, done, usage, first_token_ms, events, preview_blocked, finish_reason
             if not data_lines:
                 return
             value = '\n'.join(data_lines)
@@ -125,6 +126,7 @@ async def _receive_chat(client, url, payload, headers, *, first_token_seconds, c
                         first_watch.reschedule(None)
                     if choice.get('finish_reason') is not None:
                         finished = True
+                        finish_reason = choice['finish_reason']
                 if on_event:
                     if check:
                         check()
@@ -179,7 +181,7 @@ async def _receive_chat(client, url, payload, headers, *, first_token_seconds, c
             check()
         # Some relays omit finish_reason but send an explicit terminal sentinel.
         # Accept that only for text: tool arguments need the choice completion.
-        if not (finished or done and not calls) or not (any(content) or calls):
+        if not (finished or done and not calls):
             raise IncompleteModelStreamError(done=done, finished=finished,
                                             tool_calls=bool(calls), received_bytes=size)
         for call in calls.values():
@@ -194,5 +196,5 @@ async def _receive_chat(client, url, payload, headers, *, first_token_seconds, c
         message = {'role': 'assistant', 'content': ''.join(content)}
         if calls:
             message['tool_calls'] = [calls[key] for key in sorted(calls)]
-        result = {'choices': [{'message': message}], 'usage': usage}
+        result = {'choices': [{'message': message, 'finish_reason': finish_reason}], 'usage': usage}
         return httpx.Response(200, json=result, request=response.request), first_token_ms

@@ -137,12 +137,17 @@ def main():
     parser.add_argument('--allow-http-lan', action='store_true', help='明确允许可信局域网HTTP；密码和聊天传输不加密，不用于公网')
     parser.add_argument('--open-data', action='store_true', help='打开数据文件夹，不启动机器人')
     parser.add_argument('--computer-python', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--update-worker', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--computer-output', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--replay', type=Path, help='在独立临时数据中回放标注案例，不启动 QQ 或管理台')
     parser.add_argument('--replay-output', type=Path, default=base / 'replay-report.json')
     parser.add_argument('--replay-live', action='store_true', help='明确使用现有模型配置，可能产生费用')
     parser.add_argument('--replay-generate', action='store_true', help='同时生成回答；操作工具全部关闭')
     args = parser.parse_args()
+    if args.update_worker:
+        from .update_runtime import run
+        run(args.update_worker)
+        return
     # Frozen Python workers must never initialize settings, passwords or a GUI.
     if args.computer_python:
         if not args.computer_output:

@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .corpus import inspect_corpus as scan_corpus, corpus_chunks
-from .provider import estimate_tokens, ProviderStreamError, ProviderTimeoutError, ProviderConnectionError
+from .provider import estimate_tokens, ProviderStreamError, ProviderTimeoutError, ProviderConnectionError, ProviderOutputBudgetError
 from .tools import read_public, search_public
 from .character_catalog import CharacterCatalog
 
@@ -372,20 +372,42 @@ class DistillationService:
                 checkpoint['state']['usage'] = budget.summary()
                 checkpoint['save'](distillation_cache=checkpoint['state'])
             try:
+                selected=getattr(budget,'active_model',None)
+                def authorized():
+                    budget.check()
+                    if selected is not None:
+                        from .settings import resolve_model
+                        cfg=self.provider.settings.get()
+                        current=resolve_model(cfg,'distillation',model_id=selected['id'])
+                        return not cfg.get('paused') and current==selected and selected['id'] in cfg.get('routing',{}).get('fallback',[])
+                    return True
+                options={'config':selected} if selected is not None else {}
                 result = await self.provider.complete(messages, purpose='distillation', scope_id=scope_id,
-                                                      max_tokens=max_tokens, before_send=budget.check)
+                                                      max_tokens=max_tokens, before_send=authorized,**options)
                 break
-            except (ProviderStreamError, ProviderTimeoutError, ProviderConnectionError) as exc:
+            except (ProviderStreamError, ProviderTimeoutError, ProviderConnectionError, ProviderOutputBudgetError) as exc:
                 # Analysis has no tool side effects. Keep the failed attempt's
                 # estimated cost and checkpoint before one fresh, bounded retry.
-                budget.usage_unknown = True
+                if isinstance(exc,ProviderOutputBudgetError) and exc.usage:
+                    budget.finish({'usage':exc.usage},reserved)
+                else:budget.usage_unknown = True
                 if checkpoint:
                     checkpoint['state']['usage'] = budget.summary()
                     checkpoint['save'](distillation_cache=checkpoint['state'])
                 if attempt:
-                    raise type(exc)(str(exc) + '；当前分析已重试1次仍未完成。可在模型供应商中选择专用人格蒸馏模型，或检查中转服务超时；已完成步骤保留。') from exc
+                    raise type(exc)(str(exc) + '；当前分析已重试1次仍未完成。可在模型供应商中选择专用人格蒸馏模型；已完成步骤保留。') from exc
                 budget.check()
+                if isinstance(exc,ProviderOutputBudgetError):max_tokens=min(16000,max_tokens*4)
+                if hasattr(self.provider,'settings') and hasattr(self.provider,'resolve'):
+                    from .settings import resolve_model
+                    cfg=self.provider.settings.get();primary=self.provider.resolve('distillation',scope_id)
+                    for model_id in cfg.get('routing',{}).get('fallback',[]):
+                        candidate=resolve_model(cfg,'distillation',model_id=model_id)
+                        if candidate and candidate.get('enabled',True) and candidate.get('model_type')!='embedding' and candidate.get('id')!=primary.get('id'):
+                            budget.active_model=candidate
+                            break
                 await _progress(getattr(budget, 'progress', None), 'retry',
+                    '模型输出额度耗尽，正在预算内扩大输出额度后重试（最多1次）' if isinstance(exc,ProviderOutputBudgetError) else
                     '模型连接未完整结束，正在重试当前分析（最多1次，计入任务配额；已完成步骤保留）')
                 await asyncio.sleep(.4)
         budget.finish(result, reserved)

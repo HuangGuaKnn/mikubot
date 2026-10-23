@@ -36,6 +36,7 @@ def test_offline_commands_memory_dictionary_task(tmp_path):
 
 def test_non_owner_contribution_pending_and_scope_isolation(tmp_path):
     store, settings = Store(tmp_path), Settings(tmp_path)
+    settings.update({'language':{'group_isolation':True}})
     settings._data['onebot'].update(enabled=True, owner_ids=['101'], allowed_groups=['123'])
     chat = ChatService(store, settings, FakeProvider())
     async def scenario():

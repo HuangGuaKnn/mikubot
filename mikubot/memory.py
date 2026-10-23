@@ -116,17 +116,22 @@ def _date(value: Any) -> datetime | None:
         return None
 
 
-def _time_window(query: str, now: datetime) -> tuple[datetime, datetime] | None:
-    local = now.astimezone(HK)
+def _time_window(query: str, now: datetime, zone=None) -> tuple[datetime, datetime] | None:
+    zone=zone or HK
+    local = now.astimezone(zone)
     day = local.replace(hour=0, minute=0, second=0, microsecond=0)
     explicit = re.search(r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?", query)
     if explicit:
         try:
-            start = datetime(*(int(item) for item in explicit.groups()), tzinfo=HK)
+            start = datetime(*(int(item) for item in explicit.groups()), tzinfo=zone)
             return start.astimezone(UTC), (start + timedelta(days=1)).astimezone(UTC)
         except ValueError:
             return None
-    if "昨天" in query:
+    if "昨晚" in query or "昨夜" in query or "昨天晚上" in query:
+        start,end=day-timedelta(days=1)+timedelta(hours=18),day+timedelta(hours=6)
+    elif "前天" in query:
+        start,end=day-timedelta(days=2),day-timedelta(days=1)
+    elif "昨天" in query:
         start, end = day - timedelta(days=1), day
     elif "今天" in query:
         start, end = day, day + timedelta(days=1)
@@ -226,7 +231,7 @@ def _phrase_match(query: str, text: str) -> bool:
     return re.search(left + re.escape(query) + right, normalized(text)) is not None
 
 
-def _rank_lexical(docs: list[_Document], query: str, user_id: str) -> None:
+def _rank_lexical(docs: list[_Document], query: str, user_id: str, zone=None) -> None:
     if not docs:
         return
     query = normalized(query)
@@ -236,7 +241,7 @@ def _rank_lexical(docs: list[_Document], query: str, user_id: str) -> None:
     frequencies = Counter(term for doc in docs for term in doc.terms)
     average = sum(sum(doc.terms.values()) for doc in docs) / len(docs) or 1
     now = datetime.now(UTC)
-    window = _time_window(query, now)
+    window = _time_window(query, now,zone)
     known_subjects = {normalized(doc.record.get("subject") or "") for doc in docs}
     requested_subjects = {subject for subject in known_subjects if subject and _phrase_match(subject, query)}
     for doc in docs:
@@ -698,7 +703,8 @@ class MemoryEngine:
                     docs.extend(_documents([r for r in extra.values() if r.get('property') != 'memory_relation'], self._term_cache.terms))
                     for doc in docs:
                         doc.bm25, doc.score, doc.matched = 0., 0., []
-                    _rank_lexical(docs, query, user_id)
+                    from .timezones import config_zone
+                    _rank_lexical(docs, query, user_id,config_zone(self.settings))
                 # Already-indexed authorized chunks still participate outside
                 # the cold-build budget, without retaining every large vector.
                 cached, missing = await self._read_async(self._cached_scores, docs, signature, dimension,
@@ -771,7 +777,8 @@ class MemoryEngine:
         records = [record for record in self._visible(scope_id, str(user_id), config, record_ids=candidates).values()
                    if record.get('property') != 'memory_relation']
         docs = _documents(records, self._term_cache.terms)
-        _rank_lexical(docs, query, str(user_id))
+        from .timezones import config_zone
+        _rank_lexical(docs, query, str(user_id),config_zone(self.settings))
         return docs
 
     def _current_results(self, docs, scope_id, user_id, query, limit, mode):

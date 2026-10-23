@@ -54,7 +54,15 @@ def runtime_info():
     base = application_base()
     windows = sys.platform == 'win32' and platform.machine().lower() in {'amd64', 'x86_64'}
     mode = 'installed' if frozen and windows and (base / '.mikubot-install.json').is_file() else 'portable' if frozen else 'source'
+    service = ''
+    if sys.platform == 'linux':
+        try:
+            match = re.search(r'/(mikubot(?:@[a-zA-Z0-9_-]+)?\.service)(?:/|$)', Path('/proc/self/cgroup').read_text())
+            service = match[1] if match else ''
+        except OSError: pass
+    supported = windows if frozen else sys.platform in ('win32','linux','darwin') and not Path('/.dockerenv').exists()
     return {'mode': mode, 'default_kind': 'installer' if mode == 'installed' else 'portable' if frozen and windows else 'source',
+            'switch_supported': supported, 'update_kind': 'portable' if frozen else 'source', 'service':service,
             'install_supported': mode == 'installed' and windows,
             'current_version': __version__, 'repository': REPOSITORY, 'releases_url': RELEASES_URL}
 
@@ -167,11 +175,11 @@ class UpdateManager:
         if result.is_file() and not is_link(result) and result.stat().st_size <= 4096:
             try:
                 raw = json.loads(result.read_text('utf-8-sig'))
-                if raw.get('status') in ('completed', 'failed', 'unknown') and raw.get('download_id') == self.download.get('id'):
+                if raw.get('status') in ('preparing','backing_up','replacing','restarting','completed', 'failed', 'unknown') and raw.get('download_id') == self.download.get('id'):
                     outcome = {key: str(raw.get(key, ''))[:500] for key in ('status', 'message', 'at')}
-                    if value.get('status') == 'interrupted': value.update(status=outcome['status'], message=outcome['message'])
+                    if value.get('status') in ('interrupted','installing'): value.update(status=outcome['status'], message=outcome['message'])
             except (ValueError, OSError, AttributeError): pass
-        return {**self.runtime, 'automatic_active': bool(self._auto_task and not self._auto_task.done()), 'install_result': outcome, 'checked_at': self.checked_at, 'releases': copy.deepcopy(self.releases),
+        return {**self.runtime, 'automatic_active': bool(self._auto_task and not self._auto_task.done()) or outcome.get('status') in ('preparing','backing_up','replacing','restarting'), 'install_result': outcome, 'checked_at': self.checked_at, 'releases': copy.deepcopy(self.releases),
                 'page': self.page, 'has_more': self.has_more, 'include_prerelease': self.include_prerelease, 'download': value}
 
     @staticmethod
@@ -393,6 +401,81 @@ class UpdateManager:
         if self._launching: return
         await self.cancel()
 
+    def startup_pending(self):
+        return self.snapshot().get('install_result',{}).get('status') in ('preparing','backing_up','replacing','restarting')
+
+    def launch_replacement(self, download_id):
+        if not self.runtime.get('switch_supported'): raise ValueError('当前运行环境不支持程序内切换版本；容器请更换镜像')
+        path = self.verified_file(download_id)
+        target = application_base().resolve()
+        if target == self.data_dir or target.is_relative_to(self.data_dir): raise ValueError('程序与数据目录重叠，无法安全更新')
+        from .update_runtime import regular
+        regular(target);regular(self.data_dir)
+        receipt=target/'.mikubot-update.json'
+        if receipt.is_file():
+            from .update_runtime import destination,digest
+            previous=json.loads(regular(receipt).read_text('utf-8'))
+            for name,sha in previous.get('files',{}).items():
+                installed=destination(target,name,self.data_dir)
+                if not installed.is_file() or digest(installed)!=sha:raise ValueError('程序文件存在本地修改，请先保存修改，未覆盖代码')
+        key = version_key(self.download['tag'])
+        if key < version_key(__version__): raise ValueError('此历史版本未声明数据库降级兼容性，未自动覆盖；请从匹配备份恢复')
+        if self.runtime['mode']=='source' and (target/'.git').exists() and not (target/'.mikubot-update.json').is_file():
+            changed = subprocess.check_output(['git','status','--porcelain','--untracked-files=no'],cwd=target,text=True,timeout=10)
+            if changed.strip(): raise ValueError('源码目录存在未提交修改，请先保存修改，未覆盖代码')
+        folder=path.parent
+        if self.runtime.get('update_kind')=='source':
+            worker=folder/'update-worker.py'
+            worker.write_bytes((Path(__file__).parent/'update_runtime.py').read_bytes())
+            command=[sys.executable,str(worker),'--config',str(folder/'switch.json')]
+            launch=[sys.executable,'-m','mikubot',*sys.argv[1:]]
+        else:
+            # The helper uses its own EXE and libraries so Windows does not
+            # retain locks on the very program files being replaced.
+            helper=folder/'helper';helper.mkdir(exist_ok=False)
+            for directory,dirs,names in os.walk(target/'_internal',followlinks=False):
+                for name in [*dirs,*names]:regular(Path(directory)/name)
+            shutil.copy2(target/'mikubot.exe',helper/'mikubot.exe')
+            shutil.copytree(target/'_internal',helper/'_internal',symlinks=False)
+            command=[str(helper/'mikubot.exe'),'--update-worker',str(folder/'switch.json')]
+            launch=[str(target/'mikubot.exe'),*sys.argv[1:]]
+        record=json.loads((self.data_dir/'server.json').read_text('utf-8'))
+        launch += ['--data-dir',str(self.data_dir),'--port',str(record['port']),'--strict-port']
+        config={'target':str(target),'data':str(self.data_dir),'archive':str(path),'sha256':self.download['sha256'],
+                'parent_pid':os.getpid(),'download_id':download_id,'kind':self.download['kind'],
+                'version':self.download['tag'].removeprefix('v'),'port':record['port'],'launch':launch,'service':self.runtime.get('service',''),
+                'base_python':getattr(sys,'_base_executable',sys.executable)}
+        config['requirements']='requirements-desktop.txt' if sys.platform=='win32' and record.get('mode')=='desktop' else 'requirements-server.txt'
+        regular(folder/'switch.json').write_text(json.dumps(config),'utf-8')
+        if os.name!='nt':(folder/'switch.json').chmod(0o600)
+        if config['service']:
+            command=['systemd-run','--unit','mikubot-update-'+download_id[:12],'--collect','--property=Type=exec',*command]
+            subprocess.run(command,check=True,timeout=15,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            pid=None
+        else:
+            process=subprocess.Popen(command,cwd=target,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0),start_new_session=os.name!='nt')
+            pid=process.pid
+        self.download.update(status='installing',automatic=True,message='更新文件已校验，正在自动备份、替换程序并重启')
+        self._save()
+        return {'ok':True,'worker_pid':pid,'message':self.download['message']}
+
+    def start_switch(self, release_id, handoff):
+        if not self.runtime.get('switch_supported'): raise ValueError('当前环境不支持自动切换，请使用对应部署方式更新')
+        release=next((value for value in self.releases if value['id']==release_id),None)
+        if not release or version_key(release['tag'])<version_key(__version__): raise ValueError('请选择当前或较新版本；旧版需要匹配的数据备份')
+        self.start_download(release_id,self.runtime['update_kind'])
+        async def finish():
+            try:
+                await asyncio.shield(self._task)
+                if self.download.get('status')=='ready': await handoff(self.download['id'],replacement=True)
+            except asyncio.CancelledError: raise
+            except Exception as exc:
+                self.download.update(status='failed',message=str(exc)[:500] if isinstance(exc,ValueError) else '未能交接自动更新，当前程序未替换；请查看运行日志')
+                self._save();logging.getLogger(__name__).exception('程序切换交接失败')
+        self._auto_task=asyncio.create_task(finish())
+        return self.snapshot()
+
 
 def install_updates(app, data_dir):
     from fastapi import Body, HTTPException, Request
@@ -403,7 +486,9 @@ def install_updates(app, data_dir):
     app.state.updates = manager
 
     def snapshot(request):
-        return {**manager.snapshot(), 'local_install_allowed': local_peer(request) and callable(app.state.shutdown)}
+        return {**manager.snapshot(), 'local_install_allowed': local_peer(request) and callable(app.state.shutdown),
+                'local_policy_allowed':local_peer(request), 'remote_switch_enabled':app.state.settings.get().get('updates',{}).get('allow_remote',False),
+                'switch_allowed': callable(app.state.shutdown) and (local_peer(request) or app.state.settings.get().get('updates',{}).get('allow_remote',False))}
 
     def check_idle():
         if any(job['status'] not in TERMINAL for job in app.state.runs.list()):
@@ -411,17 +496,32 @@ def install_updates(app, data_dir):
         if app.state.provider._reservations:
             raise ValueError('仍有模型请求进行中，请等待回复完成后更新')
 
-    async def handoff(download_id, *, automatic=False):
+    async def handoff(download_id, *, automatic=False, replacement=False):
         check_idle()
         if manager._launching: raise ValueError('已在准备安装，请勿重复点击')
         manager._launching = app.state.provider._updating = True
         try:
-            result = await asyncio.to_thread(manager.launch_installer, download_id, automatic=automatic)
+            result = (await asyncio.to_thread(manager.launch_replacement, download_id) if replacement
+                      else await asyncio.to_thread(manager.launch_installer, download_id, automatic=automatic))
         except BaseException:
             manager._launching = app.state.provider._updating = False
             raise
         asyncio.get_running_loop().call_later(.5, app.state.shutdown)
         return result
+
+    @app.post('/api/updates/switch')
+    async def switch(request: Request, payload: dict = Body(...)):
+        if not snapshot(request)['switch_allowed']: raise HTTPException(403,'服务器自动更新尚未由运行电脑授权开启')
+        check_idle()
+        manager.start_switch(payload.get('release_id'),handoff)
+        return snapshot(request)
+
+    @app.post('/api/updates/remote-policy')
+    async def remote_policy(request: Request,payload: dict=Body(...)):
+        if not local_peer(request):raise HTTPException(403,'请在运行电脑上授权远程切换版本')
+        if type(payload.get('enabled')) is not bool:raise ValueError('远程更新开关须为布尔值')
+        app.state.settings.update({'updates':{'allow_remote':payload['enabled']}})
+        return snapshot(request)
 
     @app.post('/api/updates/apply')
     async def apply(request: Request, payload: dict = Body(...)):

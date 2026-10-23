@@ -42,5 +42,10 @@ vm.createContext(sandbox);vm.runInContext(fs.readFileSync(path.join(__dirname,'.
   fail=false;result.mode='source';result.download.can_install=false;
   await ui.handleAction('update-status',{});assert.match(node.innerHTML,/未提交改动不会被覆盖/);
   await ui.handleChange({id:'update-prerelease',checked:true});assert.equal(calls.at(-1).options.body.include_prerelease,true);
-  ui.close();console.log('Update UI selection, escaping, and explicit install checks passed');
+  result={...result,switch_supported:true,switch_allowed:true,mode:'source',install_result:{},download:{status:'idle'}};
+  await ui.handleAction('update-status',{});assert.match(node.innerHTML,/data-action="update-switch"/);
+  assert.ok(!node.innerHTML.includes('data-action="update-apply"'));
+  const switchBefore=calls.length;await ui.handleAction('update-switch',{});assert.equal(calls.length,switchBefore);
+  await confirm.callback();assert.equal(calls.at(-1).url,'/api/updates/switch');assert.equal(calls.at(-1).options.body.release_id,12);
+  ui.close();console.log('Update UI selection, escaping, direct switch and explicit install checks passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

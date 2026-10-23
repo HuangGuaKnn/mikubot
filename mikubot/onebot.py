@@ -287,6 +287,8 @@ class OneBotBridge:
                         source='https://'+source[len('http://'):]
                 if source.startswith(('https://', 'http://', 'data:image/')) and len(source) <= 4 * 1024 * 1024:
                     images.append(source)
+                elif re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{5,255}',source):
+                    images.append('onebot-image:'+source)
         return ''.join(text).strip(), images, mentions, reply_id
 
     async def handle_event(self, payload, *, wait=True):
@@ -356,6 +358,27 @@ class OneBotBridge:
             while len(self._seen) > 4096:
                 self._seen.popitem(last=False)
         text, images, mentions, reply_id = self._message(payload)
+        if any(image.startswith('onebot-image:') for image in images):
+            resolved=[]
+            for image in images:
+                if not image.startswith('onebot-image:'):resolved.append(image);continue
+                socket=self._socket
+                if socket is None:continue
+                echo=uuid.uuid4().hex;future=asyncio.get_running_loop().create_future();self._pending[echo]=(socket,future)
+                try:
+                    action={'action':'get_image','params':{'file':image[len('onebot-image:'):]},'echo':echo}
+                    if hasattr(socket,'send_json'):await socket.send_json(action)
+                    else:await socket.send(json.dumps(action))
+                    result=await asyncio.wait_for(future,10)
+                    value=(result or {}).get('data') or {}
+                    url=value.get('url') if isinstance(value,dict) else None
+                    if isinstance(url,str) and url.startswith('https://') and len(url)<=3000:resolved.append(url)
+                except (OSError,TimeoutError,RuntimeError):pass
+                finally:self._pending.pop(echo,None)
+            if len(resolved)!=len(images):
+                await self.send(scope_id,'这张QQ图片暂时无法读取，请重新发送原图后重试。')
+                return
+            images=resolved
         if not text and not images:
             self._diagnostics.mark('empty_message', scope_id=scope_id, user_id=user_id)
             return
@@ -501,7 +524,7 @@ class OneBotBridge:
                 await socket.send_json(action)
             else:
                 await socket.send(json.dumps(action, ensure_ascii=False))
-            timeout = float(self._config().get('action_timeout_seconds', 10))
+            timeout = float(self._config().get('action_timeout_seconds', 30))
             result = await asyncio.wait_for(future, max(0.01, min(timeout, 60)))
             confirmed = bool(result and result.get('status') == 'ok' and result.get('retcode') == 0
                              and isinstance(result.get('data'), dict) and result['data'].get('message_id') is not None)

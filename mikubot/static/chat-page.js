@@ -48,7 +48,8 @@ async function sendChat(form) {
 }
 
 async function renderChat() {
-  const html = await renderChatBase(), pending = state.pendingToolNotice;
+  let html = await renderChatBase();const pending = state.pendingToolNotice;
+  if(!state.scope.startsWith('web:') && window.MikubotLearning)html=(await window.MikubotLearning.deliveryPanel())+html;
   if (!pending || pending.scope_id !== state.scope) return html;
   return html.replace('<div class="chat-layout">',`${notice(`刚才提出了 ${pending.count} 项扩展工具请求，请前往审批页查看当前状态。批准前不会执行，批准结果仅在本地查看。`,"warning","go-tools","查看工具请求")}<div class="chat-layout">`);
 }

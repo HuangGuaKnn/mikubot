@@ -163,7 +163,7 @@ async def test_extraction_discards_pending_candidates_when_authority_changes(run
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def model(context, kwargs, call):
-        assert kwargs['purpose'] == 'memory'
+        assert kwargs['purpose'] == 'memory_extract'
         entered.set()
         await release.wait()
         return response(json.dumps([{'content': '我长期喜欢合作游戏', 'kind': 'preference', 'subject': user_id,

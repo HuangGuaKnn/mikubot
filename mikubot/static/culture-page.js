@@ -2,7 +2,10 @@
 
 // Page functions use the shared authenticated shell; no page executes at load.
 async function renderCultureBase() {
-  state.records = rows(await api(`/api/jargon?${query({scope_id:state.scope,q:state.filters.q,status:state.filters.status})}`));
+  const key=JSON.stringify([state.learningAll,state.scope,state.filters.q,state.filters.status]);
+  if(state.culturePage?.key!==key)state.culturePage={key,offset:0};
+  const page=await api(`/api/jargon?${query({scope_id:state.learningAll?undefined:state.scope,q:state.filters.q,status:state.filters.status,limit:100,offset:state.culturePage.offset})}`);
+  state.records=rows(page);state.cultureMeta=page;
   return heading("OUR SHARED LANGUAGE","你们懂的，它也懂。","收集黑话、别名与群梗，让它慢慢融入你们的聊天。",button("教一个新词","new-jargon","primary","plus")) + listToolbar("搜索词语、含义或话题",[["","全部"],["approved","已确认"],["pending","待确认"],["disabled","已停用"],["rejected","已拒绝"]]) + notice("同一个词可以有多个意思。只有已确认的词条参与理解；是否主动使用可以单独设置。") + (state.records.length ? `<div class="record-grid">${state.records.map(item => `<article class="record-card"><div class="record-card-head"><h3>${e(item.term)}</h3>${tag(label(item.status),item.status === "pending" ? "gold" : item.status === "approved" ? "" : "gray")}</div><p class="record-text">${e(item.meaning)}</p>${item.example ? `<div class="persona-preview">${e(item.example)}</div>` : ""}<div class="record-meta">${item.topic ? `<span>话题 · ${e(item.topic)}</span>` : ""}<span>${item.use_allowed ? "允许主动使用" : "只用于理解"}</span><span>v${e(item.version || 1)}</span></div><div class="record-actions">${item.status === "pending" ? button("确认词义","approve-jargon","primary small","check",`data-id="${e(item.id)}"`) + button("拒绝","reject-jargon","ghost small","",`data-id="${e(item.id)}"`) : ""}${button("编辑","edit-jargon","small","edit",`data-id="${e(item.id)}"`)}${item.status === "approved" || item.status === "disabled" ? button(item.status === "disabled" ? "启用" : "停用","toggle-jargon","ghost small","",`data-id="${e(item.id)}"`) : ""}<button class="icon-button push-right" data-action="delete-jargon" data-id="${e(item.id)}" aria-label="删除词条">${icon("trash")}</button></div></article>`).join("")}</div>` : empty("culture","每个群都有自己的语言","从一个缩写、昵称或梗开始。填入词义与例句，让它在正确的场合听懂你们。","new-jargon","教会它第一个词"));
 }
 
@@ -12,9 +15,11 @@ function jargonModal(item = null) {
 
 async function renderCultureTerms() {
   let html = await renderCultureBase();
+  const page=state.cultureMeta;
+  if(page?.total)html+=`<div class="record-actions"><span>共 ${e(page.total)} 条 · 第 ${Math.floor(page.offset/100)+1} 页</span>${button("上一页","culture-page","small","",`data-offset="${Math.max(0,page.offset-100)}" ${page.offset?"":"disabled"}`)}${button("下一页","culture-page","small","",`data-offset="${page.next_offset}" ${page.has_more?"":"disabled"}`)}</div>`;
   html = html.replace(button("教一个新词","new-jargon","primary","plus"),button("分析最近聊天","analyze-jargon","","spark") + button("教一个新词","new-jargon","primary","plus"));
   const current = scope();
-  const switches = `<section class="culture-controls"><div><div class="eyebrow">LEARN · UNDERSTAND · EXPRESS</div><h3>听懂与说出来，由你分别决定。</h3><p>学习只产生候选；确认词义后才用于理解。主动用梗还需要词条允许。</p></div><form data-form="culture-switches" class="culture-switch-form">${toggle("dictionary_learn","自动发现新词","分析重复出现的陌生说法。",current.dictionary_learn ?? false)}${toggle("dictionary_understand","听懂已确认词义","召回当前会话的群词典。",current.dictionary_understand ?? true)}${toggle("dictionary_use","主动使用群词","在合适的场合适量接梗。",current.dictionary_use ?? false)}<button type="submit" class="btn small">保存这组规则</button></form></section>`;
+  const switches = `<section class="culture-controls"><div><div class="eyebrow">LEARN · UNDERSTAND · EXPRESS</div><h3>听懂与说出来，由你分别决定。</h3><p>有明确释义和可靠证据的内容可自动确认，其余待审核。主动用梗还需要词条允许。</p></div><form data-form="culture-switches" class="culture-switch-form">${toggle("dictionary_learn","自动发现新词","分析重复出现的陌生说法。",current.dictionary_learn ?? false)}${toggle("dictionary_understand","听懂已确认词义","根据隔离规则召回已确认词义。",current.dictionary_understand ?? true)}${toggle("dictionary_use","主动使用群词","在合适的场合适量接梗。",current.dictionary_use ?? false)}<button type="submit" class="btn small">保存这组规则</button></form></section>`;
   const marker = '<div class="toolbar">'; html = html.replace(marker,switches + marker);
   for (const record of state.records) {
     const evidence = record.evidence;
@@ -29,8 +34,8 @@ function cultureTabs() { return `<div class="culture-mode-tabs"><button class="$
 
 async function renderCulture() {
   if (state.cultureMode !== "expressions") {
-    const html = await renderCultureTerms();
-    return html.replace('<section class="culture-controls">',cultureTabs() + '<section class="culture-controls">');
+    const html = await renderCultureTerms(),dashboard=await window.MikubotLearning?.panel("language");
+    return html.replace('<section class="culture-controls">',cultureTabs()+(dashboard||"") + '<section class="culture-controls">');
   }
   state.records = rows(await api(`/api/expressions?${query({scope_id:state.scope,status:state.filters.status})}`));
   if (state.filters.q) state.records = state.records.filter(item => `${item.term} ${item.meaning} ${item.topic || ""}`.toLowerCase().includes(state.filters.q.toLowerCase()));

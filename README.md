@@ -1,26 +1,24 @@
-# mikubot 0.1.4
+# mikubot 0.1.5
 
-> **0.1.4** 优化大量记忆检索，新增网页增量回复、回复长度与括号内容控制、现实时间开关，修复角色检索与QQ分段被追问截断，并完善模型流式、附件、时区及资源监控。详见[更新日志](RELEASE_NOTES.md)和[测试报告](TEST_REPORT.md)。
+> **0.1.5** 新增直接切换版本、记忆与黑话可视化管理、人格选填资料，以及 QQ 分段送达记录；修复后台分析输出额度耗尽误报断流、短对话未整理和 QQ 图片链接无法转交模型的问题。详见[更新日志](RELEASE_NOTES.md)和[测试报告](TEST_REPORT.md)。
 
-当前版本为 **0.1.4**，提供Windows安装版、便携版与源码部署。保留本地插件、一键更新和模型自然分段；本版重点减少大量记忆下的等待，并完善输出内容、模型调用与资料管理。下载可用性以GitHub已公开的发行资产为准。
+当前版本为 **0.1.5**，提供 Windows 安装版、便携版与源码部署。安装包和便携包无需 Python，源码支持 Python 3.11–3.13。
 
 本机运行的 AI 聊天机器人与任务助手。预装可删除的初音未来人格，支持独立聊天、QQ 接入、记忆、黑话学习、人格蒸馏和管理员电脑任务。
 
 项目原创代码使用 [MIT 许可证](LICENSE)，第三方组件及其对应源码说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。当前规范见 [CONTRACT.md](CONTRACT.md)；早期内部版本记录放在 `docs/archive/`。
 
-0.1.4角色流程整合更新：角色蒸馏改为“输入角色名或作品名 → 检索 → 选择角色 → 自动整理资料并蒸馏”，取消常规流程中的资料网页勾选与额外确认开关。本次同步更新0.1.4源码、安装包与便携包，已下载旧包的用户需重新下载，详见[使用指南](docs/USER_GUIDE.md#从作品角色蒸馏)。
-
-0.1.4断流修复重建：兼容仅返回`[DONE]`的纯文本流，蒸馏与表情包识图可在配额内额外重试一次，长角色资料分批研究。可在“模型供应商 → 为聊天、记忆、整理和人格蒸馏选择模型”单独指定人格生成与蒸馏模型，留空继承日常对话。版本号不变，旧0.1.4用户需重新下载覆盖安装；具体边界见[模型响应与故障恢复](docs/MODEL_TRANSPORT.md)。
+人格蒸馏采用“检索 → 选择角色 → 自动整理资料”的流程，可在模型供应商页指定专用模型。记忆档案与群语言页提供状态、七日新增、来源、审核和修改；群词默认共享确认后的词义，私聊及原始例句保持隔离。
 
 ## 下载与选择
 
-前往 **[GitHub Releases 下载0.1.4](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.4)**，展开Assets，按用途选择：
+前往 **[GitHub Releases 下载0.1.5](https://github.com/iownmmiku/mikubot/releases/tag/v0.1.5)**，展开Assets，按用途选择：
 
 | 文件 | 适合谁 | 使用方式 |
 | --- | --- | --- |
-| [mikubot-0.1.4-Windows-Setup.exe](https://github.com/iownmmiku/mikubot/releases/download/v0.1.4/mikubot-0.1.4-Windows-Setup.exe) | Windows 用户，推荐 | 选择父目录后自动创建 mikubot 文件夹，安装后从快捷方式打开 |
-| [mikubot-0.1.4-Windows-x64.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.4/mikubot-0.1.4-Windows-x64.zip) | 希望解压即用 | 完整解压后双击 `mikubot.exe`，不要只取出 EXE |
-| [mikubot-0.1.4-source.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.4/mikubot-0.1.4-source.zip) | 希望运行或修改代码 | 安装 Python 3.12，按下方命令启动 |
+| [mikubot-0.1.5-Windows-Setup.exe](https://github.com/iownmmiku/mikubot/releases/download/v0.1.5/mikubot-0.1.5-Windows-Setup.exe) | Windows 用户，推荐 | 选择父目录后自动创建 mikubot 文件夹，安装后从快捷方式打开 |
+| [mikubot-0.1.5-Windows-x64.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.5/mikubot-0.1.5-Windows-x64.zip) | 希望解压即用 | 完整解压后双击 `mikubot.exe`，不要只取出 EXE |
+| [mikubot-0.1.5-source.zip](https://github.com/iownmmiku/mikubot/releases/download/v0.1.5/mikubot-0.1.5-source.zip) | 希望运行或修改代码 | 安装 Python 3.12，按下方命令启动 |
 
 安装版和便携版无需 Python、Node 或 Git，默认打开独立桌面窗口。它们不包含模型账号、API Key、QQ 客户端或 NapCat/SnowLuma，需要自行准备。模型调用按所选服务商规则计费。
 
@@ -74,7 +72,7 @@
 
 ## 从源码运行
 
-Windows 安装 **Python 3.11–3.13（推荐3.12）**，完整解压`mikubot-0.1.4-source.zip`，或克隆本仓库。在包含 `requirements.txt` 的目录打开 PowerShell：
+Windows 安装 **Python 3.11–3.13（推荐3.12）**，完整解压`mikubot-0.1.5-source.zip`，或克隆本仓库。在包含 `requirements.txt` 的目录打开 PowerShell：
 
 ```powershell
 # 首次：创建 .venv、安装依赖并启动，下载依赖需要网络
@@ -110,13 +108,13 @@ Windows 默认数据在 **`%LOCALAPPDATA%\mikubot\data`**，独立于程序目�
 
 ## 在软件内选择版本与更新
 
-右上角“版本与更新”可检查固定GitHub仓库、选择正式版/测试版/历史版本、查看说明并下载指定文件。Windows 安装版自0.1.3支持“一键更新”：下载校验、退出、静默安装、以原数据目录重新打开；仍可仅下载或使用原安装窗口。源码和便携版下载到新目录后按指南部署。历史版本只下载，不直接覆盖降级。不会自动拉取代码或覆盖未提交改动，详见[更新指南](docs/UPDATES.md)。
+右上角“版本与更新”可检查固定 GitHub 仓库、选择版本和查看说明。0.1.5 起支持后台校验程序文件、备份数据、直接替换程序、自动重启与启动失败回退，无需再操作安装器。适用于 Windows 安装版、便携版及非容器源码服务；源码本地修改会阻止覆盖，远程切换需宿主管理员授权。详见[更新指南](docs/UPDATES.md)。
 
-0.1.3安装版可选择0.1.4并一键更新。0.1.0安装包没有更新入口，请先手动安装一次0.1.4；之后可在软件内检查并下载已公开版本。
+0.1.3/0.1.4 安装版使用旧更新流程完成本次升级，安装 0.1.5 后，后续更新使用直接切换。0.1.0 请先手动安装；旧便携版与源码部署首次升级需按原方式替换程序，沿用原数据目录。
 
 ## 文档与验证范围
 
-0.1.4的详细行为与限制见[模型响应、超时与消费核对](docs/MODEL_TRANSPORT.md)、[附件管理](docs/ATTACHMENTS.md)、[提醒时区](docs/REMINDER_TIMEZONES.md)、[低内存部署](docs/LOW_MEMORY.md)、[大量记忆检索](docs/MEMORY_RETRIEVAL.md)与[消费核对边界](docs/BILLING_RECONCILIATION.md)。固定反向WS或代理端口可使用 `--strict-port`；端口顺延会写入日志并在WebUI顶部提示。
+0.1.5的详细行为与限制见[模型响应、超时与消费核对](docs/MODEL_TRANSPORT.md)、[附件管理](docs/ATTACHMENTS.md)、[提醒时区](docs/REMINDER_TIMEZONES.md)、[低内存部署](docs/LOW_MEMORY.md)、[大量记忆检索](docs/MEMORY_RETRIEVAL.md)与[消费核对边界](docs/BILLING_RECONCILIATION.md)。固定反向WS或代理端口可使用 `--strict-port`；端口顺延会写入日志并在WebUI顶部提示。
 
 - [回复内容与自然分段](docs/MODEL_OUTPUT.md)：整轮/单条字符上限、括号内容处理、原文查看与均衡合并规则，默认不限制、不删除括号。
 

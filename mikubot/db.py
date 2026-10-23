@@ -1300,10 +1300,29 @@ class Store:
             self._conn.execute("DELETE FROM jargon_versions WHERE jargon_id=?", (id,))
             return self._save_jargon(record)
 
+    def jargon_visible(self, scope_id: str, record: dict) -> bool:
+        if record.get('scope_id') == scope_id:
+            return True
+        config = self._timezone_settings.get() if self._timezone_settings else {}
+        if not config or config.get('language', {}).get('group_isolation', False):
+            return False
+        origin = record.get('scope_id', '')
+        if ':group:' not in scope_id or ':group:' not in origin or record.get('entry_type', 'jargon') != 'jargon':
+            return False
+        try:
+            return self.get_scope(origin).get('enabled', True) and self.get_scope(scope_id).get('enabled', True)
+        except KeyError:
+            return False
+
     def match_jargon(self, scope_id: str, text: str, limit: int = 6) -> list[dict]:
         limit, text = _limit(limit, 50), _text(text, "text", required=False)
         matches = []
-        for record in self.list_jargon(scope_id=scope_id, status="approved"):
+        with self._lock:
+            rows = self._conn.execute("SELECT data FROM jargon WHERE status='approved' AND term<>'' AND instr(lower(?),lower(term))>0 ORDER BY (scope_id=?) DESC,updated_at DESC LIMIT 200",(text,scope_id)).fetchall()
+        for row in rows:
+            record = json.loads(row[0])
+            if not self.jargon_visible(scope_id, record):
+                continue
             if record.get("entry_type", "jargon") == "expression":
                 continue
             term = record["term"]

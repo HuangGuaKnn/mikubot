@@ -29,6 +29,13 @@ class ProviderStreamError(ProviderError):
     """Incomplete transport result; callers may retry side-effect-free analysis."""
 
 
+class ProviderOutputBudgetError(ProviderError):
+    """The transport finished but the model exhausted its generation allowance."""
+    def __init__(self, message='模型输出额度已用完，思考未结束或正文被截断；请增加输出额度或选择适合此任务的模型', *, usage=None, retryable=False):
+        super().__init__(message,retryable=retryable)
+        self.usage=usage
+
+
 class ProviderBudgetExceededError(ProviderError):
     """A local budget or Planner quota actually vetoed the request."""
 
@@ -46,7 +53,7 @@ class ProviderRateLimitError(ProviderError):
 
 
 def is_budget_exceeded(exc):
-    if isinstance(exc, (ProviderTimeoutError, ProviderConnectionError, ProviderRateLimitError)):
+    if isinstance(exc, (ProviderTimeoutError, ProviderConnectionError, ProviderRateLimitError, ProviderOutputBudgetError)):
         return False
     if isinstance(exc, ProviderBudgetExceededError):
         return True
@@ -585,6 +592,16 @@ class Provider:
             content = message.get('content') or ''
             if isinstance(content, list):
                 content = '\n'.join(str(x.get('text', '')) for x in content if isinstance(x, dict))
+            finish_reason=data['choices'][0].get('finish_reason')
+            if finish_reason=='length':
+                self.store.add_event('model_output_budget','模型正常结束，但输出额度耗尽，未采用截断内容或执行工具',
+                    scope_id=scope_id,purpose=purpose,provider_id=cfg.get('id','default'),
+                    output_tokens=output_tokens,has_content=bool(str(content).strip()),
+                    reasoning_tokens=(raw_usage.get('completion_tokens_details') or {}).get('reasoning_tokens') if isinstance(raw_usage.get('completion_tokens_details'),dict) else None)
+                safe_fallback=purpose in ('chat','planner','summary','memory_extract','jargon_learning','expression_learning','sticker_select') and not any(m.get('role')=='tool' or m.get('tool_calls') for m in messages)
+                raise ProviderOutputBudgetError(usage=record,retryable=safe_fallback)
+            if not str(content).strip() and not message.get('tool_calls'):
+                raise ProviderError('模型已正常结束但没有返回正文；用量已记录，请检查模型参数与任务路由')
             if purpose == 'chat' and preview_active():
                 if message.get('tool_calls'): preview('reset', '')
                 elif not previewed and content: preview('delta', str(content))

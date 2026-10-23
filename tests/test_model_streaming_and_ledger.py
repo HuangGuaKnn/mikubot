@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from mikubot.api import create_app
 from mikubot.db import Store
 from mikubot.model_stream import ModelStreamError, receive_chat
-from mikubot.provider import Provider, ProviderError, ProviderTimeoutError, ProviderStreamError
+from mikubot.provider import Provider, ProviderError, ProviderTimeoutError, ProviderStreamError, ProviderOutputBudgetError, is_budget_exceeded
 from mikubot.settings import Settings, PROVIDER_DEFAULTS
 from mikubot.usage_ledger import reconcile, breakdown
 
@@ -82,6 +82,20 @@ def test_done_sentinel_completes_text_without_finish_reason(setup_provider):
     transport(lambda request:httpx.Response(200, headers={'content-type':'text/event-stream'}, stream=Chunks([raw])))
     assert asyncio.run(provider.complete([{'role':'user','content':'hi'}]))['content'] == '完整的纯文本。'
     assert len(store.list_usage()) == 1 and not store.list_usage()[0].get('unconfirmed')
+
+
+def test_reasoning_exhaustion_is_not_misreported_as_network_or_daily_budget(setup_provider):
+    provider, _, store, transport=setup_provider
+    raw=sse({'reasoning':'private thinking fragment'},'length')
+    raw+=b'data: {"choices":[],"usage":{"prompt_tokens":70,"completion_tokens":600,"completion_tokens_details":{"reasoning_tokens":600}}}\n\ndata: [DONE]\n\n'
+    transport(lambda request:httpx.Response(200,headers={'content-type':'text/event-stream'},stream=Chunks([raw])))
+    with pytest.raises(ProviderOutputBudgetError) as failure:
+        asyncio.run(provider.complete([{'role':'user','content':'hi'}],purpose='distillation',max_tokens=600))
+    assert not is_budget_exceeded(failure.value)
+    records=store.list_usage()
+    assert len(records)==1 and records[0]['output_tokens']==600 and not records[0].get('unconfirmed')
+    assert not any(event['kind']=='model_stream_incomplete' for event in store.list_events())
+    assert 'private thinking fragment' not in json.dumps(store.list_events())
 
 
 def test_real_provider_analysis_retry_preserves_two_separate_usage_records(setup_provider, tmp_path):

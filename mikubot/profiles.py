@@ -50,6 +50,8 @@ def resolve_scope(scope, settings):
     if profile is None: raise ValueError('会话绑定的机器人配置不存在')
     overrides = scope.get('profile_overrides', [])
     values = {k: v for k, v in profile['values'].items() if k not in overrides}
+    if 'dictionary_learn' not in overrides:
+        values.setdefault('dictionary_learn',settings.get().get('language',{}).get('learning_enabled',True))
     if ':private:' in scope['id'] or scope['id'].startswith('web:'):
         if 'always_reply' not in overrides:
             values['always_reply'] = profile['values'].get('private_always_reply', True)
