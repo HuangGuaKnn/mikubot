@@ -21,9 +21,9 @@ from .timezones import config_zone
 DEFAULTS = {
     'bot_profiles': DEFAULT_PROFILES,
     'model': {'base_url': '', 'model': '', 'api_key': '', 'vision': False,
-              'temperature': 0.7, 'input_price': 0.0, 'output_price': 0.0, 'timeout_seconds':90,
+              'temperature': 0.7, 'top_p': 1.0, 'input_price': 0.0, 'output_price': 0.0, 'timeout_seconds':90,
               'stream_mode':'auto', 'first_token_timeout_seconds':90, 'total_timeout_seconds':300,
-              'timeout_fallback':False},
+              'timeout_fallback':False, 'max_tokens':8192, 'reasoning_effort':'', 'custom_params':{}},
     'onebot': {'enabled': False, 'adapter': 'napcat', 'ws_url': '', 'access_token': '',
                'owner_ids': [], 'allowed_users': [], 'allowed_groups': [], 'chat_policy': 'blacklist',
                'blocked_users': [], 'blocked_groups': [], 'max_message_chars': 0},
@@ -467,13 +467,29 @@ class Settings:
                     raise ValueError('流式模式须为auto/on/off')
                 if type(candidate['timeout_fallback']) is not bool:
                     raise ValueError('超时备用模型开关须为布尔值')
-                for key, low, high in (('temperature', 0, 2), ('input_price', 0, 1000000), ('output_price', 0, 1000000)):
+                for key, low, high in (('temperature', 0, 2), ('top_p', 0, 1), ('input_price', 0, 1000000), ('output_price', 0, 1000000)):
                     try:
                         candidate[key] = float(candidate[key])
                     except (ValueError, TypeError) as exc:
                         raise ValueError('模型温度和价格须为数字') from exc
                     if not math.isfinite(candidate[key]) or not low <= candidate[key] <= high:
                         raise ValueError('模型温度或价格超出支持范围')
+                if type(candidate.get('max_tokens')) is not int or not 1 <= candidate['max_tokens'] <= 1000000:
+                    raise ValueError('最大 Tokens 须为1—1000000的整数')
+                if not isinstance(candidate.get('reasoning_effort'), str) or len(candidate['reasoning_effort']) > 40:
+                    raise ValueError('思考强度须为不超过40个字符的文本')
+                custom_params = candidate.get('custom_params', {})
+                if not isinstance(custom_params, dict) or len(custom_params) > 50:
+                    raise ValueError('自定义参数须为不超过50项的对象')
+                for custom_key, custom_value in custom_params.items():
+                    if not isinstance(custom_key, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]{0,63}', custom_key):
+                        raise ValueError('自定义参数键名无效')
+                    if custom_key in {'model', 'messages', 'stream', 'stream_options', 'tools', 'tool_choice', 'max_tokens', 'temperature'}:
+                        raise ValueError('自定义参数不能覆盖模型请求核心字段')
+                    if isinstance(custom_value, (dict, list)):
+                        raise ValueError('自定义参数值目前只支持字符串、数字、布尔值或空值')
+                    if custom_value is not None and not isinstance(custom_value, (str, int, float, bool)):
+                        raise ValueError('自定义参数值类型无效')
                 for key in ('vision', 'tools', 'enabled'):
                     if key in candidate and type(candidate[key]) is not bool:
                         raise ValueError('模型能力开关须为布尔值')

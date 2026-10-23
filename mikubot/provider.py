@@ -246,8 +246,8 @@ class Provider:
 
     @staticmethod
     def _same_model(left, right):
-        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type',
-                  'stream_mode', 'first_token_timeout_seconds', 'total_timeout_seconds', 'timeout_fallback')
+        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'top_p', 'input_price', 'output_price', 'timeout_seconds', 'model_type',
+                  'stream_mode', 'first_token_timeout_seconds', 'total_timeout_seconds', 'timeout_fallback', 'max_tokens', 'reasoning_effort', 'custom_params')
         return all(left.get(key) == right.get(key) for key in fields)
 
     def _check_send(self, before_send):
@@ -471,8 +471,14 @@ class Provider:
             raise ProviderError('本次模型输入超过文字或图片总上限，请减少资料、历史或工具输出后重试。')
         url = endpoint(cfg['base_url'])
         timeout = request_timeout(cfg)
+        configured_max_tokens = cfg.get('max_tokens', 8192)
+        if type(configured_max_tokens) is int:
+            max_tokens = min(max_tokens, configured_max_tokens)
         reservation, max_tokens = await self._reserve(cfg, scope_id, purpose, estimate_tokens(messages, tools), max_tokens)
-        payload = {'model': cfg['model'], 'messages': messages, 'temperature': cfg.get('temperature', 0.7), 'max_tokens': max_tokens}
+        payload = dict(cfg.get('custom_params') or {})
+        payload.update({'model': cfg['model'], 'messages': messages, 'temperature': cfg.get('temperature', 0.7), 'top_p': cfg.get('top_p', 1.0), 'max_tokens': max_tokens})
+        if cfg.get('reasoning_effort'):
+            payload['reasoning_effort'] = cfg['reasoning_effort']
         stream_mode = cfg.get('stream_mode', 'off')
         if stream_mode != 'off':
             payload['stream'] = True
