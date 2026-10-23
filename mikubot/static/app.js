@@ -234,7 +234,7 @@ async function saveModal(kind,form) {
   await api(endpoint + (item ? `/${encodeURIComponent(item.id)}` : ""),{method:item ? "PUT" : "POST",body:payload});
   closeModal(); toast(item ? "修改已保存" : "已添加到这个小世界"); await bootstrap();
 }
-function modelPayload(form) { const data = getForm(form), model = {base_url:data.base_url,model:data.model,vision:data.vision}; if (data.api_key) model.api_key = data.api_key; for (const key of ["temperature","top_p","input_price","output_price","timeout_seconds","first_token_timeout_seconds","total_timeout_seconds","max_tokens"]) if (data[key] !== undefined) model[key] = Number(data[key]); if (data.reasoning_effort !== undefined) model.reasoning_effort = data.reasoning_effort.trim(); if (data.custom_params !== undefined) { try { model.custom_params = data.custom_params.trim() ? JSON.parse(data.custom_params) : {}; } catch { throw new Error("自定义参数必须是有效的 JSON 对象。"); } if (!model.custom_params || Array.isArray(model.custom_params) || typeof model.custom_params !== "object") throw new Error("自定义参数必须是 JSON 对象。"); } if (data.stream_mode !== undefined) model.stream_mode = data.stream_mode; if (data.timeout_fallback !== undefined) model.timeout_fallback = !!data.timeout_fallback; return model; }
+function modelPayload(form) { const data = getForm(form), model = {base_url:data.base_url,model:data.model,vision:data.vision}; if (data.api_key) model.api_key = data.api_key; for (const key of ["temperature","top_p","input_price","output_price","timeout_seconds","first_token_timeout_seconds","total_timeout_seconds","max_tokens"]) if (data[key] !== undefined) model[key] = Number(data[key]); if (data.reasoning_effort !== undefined) model.reasoning_effort = data.reasoning_effort.trim(); if (data.custom_params !== undefined) model.custom_params = typeof parseCustomParams === "function" ? parseCustomParams(data.custom_params) : {}; if (data.stream_mode !== undefined) model.stream_mode = data.stream_mode; if (data.timeout_fallback !== undefined) model.timeout_fallback = !!data.timeout_fallback; return model; }
 function splitIds(value) { return String(value || "").split(/[\s,，;；]+/).map(item => item.trim()).filter(Boolean); }
 function splitNames(value) { return [...new Set(String(value || "").split(/[\n\r,，;；]+/).map(item => item.trim()).filter(Boolean))]; }
 
@@ -410,6 +410,7 @@ document.addEventListener("submit",async event => {
 });
 let searchTimer;
 document.addEventListener("input",event => {
+  if (typeof syncRangePair === "function") syncRangePair(event.target);
   window.MikubotPages.handleInput(event.target);
   window.MikubotEmbedding?.handleInput(event.target);
   window.MikubotExperience.handleInput(event.target);

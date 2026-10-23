@@ -14,3 +14,7 @@
 .embedding-status{display:flex;gap:16px;justify-content:space-between;align-items:center;padding:20px 24px;margin-bottom:20px}.embedding-status h2{font-size:17px}.embedding-status p{margin-top:8px;overflow-wrap:anywhere}.embedding-status .section-actions{flex-shrink:0;margin:0}
 .modal:has(form[data-form^="embedding-"]) #modal-content{display:flex;flex-direction:column;max-height:calc(100dvh - 60px)}.modal form[data-form^="embedding-"]{display:flex;flex-direction:column;min-height:0}.modal form[data-form^="embedding-"] .modal-body{overflow-y:auto;min-height:0}.modal form[data-form^="embedding-"] .modal-footer{flex-shrink:0}
 @media(max-width:760px){.model-catalog-layout{grid-template-columns:minmax(0,1fr)}.embedding-status{display:block;padding:18px}.embedding-status .section-actions{margin-top:14px}}
+.range-with-value{display:grid;grid-template-columns:minmax(0,1fr) 92px;align-items:center;gap:10px}
+.range-with-value input[type="range"]{width:100%;min-width:0;accent-color:var(--accent,#169e96)}
+.range-with-value input[type="number"]{width:100%;min-width:0}
+@media(max-width:760px){.range-with-value{grid-template-columns:minmax(0,1fr) 78px;gap:8px}}
