@@ -14,8 +14,9 @@ from .settings import PROVIDER_DEFAULTS, Settings, resolve_model
 
 PURPOSES = ('chat', 'planner', 'memory', 'gate', 'summary', 'distillation', 'embedding')
 _SOURCE_FIELDS = ('name', 'base_url', 'api_key', 'enabled', 'clear_api_key')
-_MODEL_FIELDS = ('name', 'model', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type',
-                 'stream_mode', 'first_token_timeout_seconds', 'total_timeout_seconds', 'timeout_fallback')
+_MODEL_FIELDS = ('name', 'model', 'enabled', 'vision', 'tools', 'temperature', 'top_p', 'input_price', 'output_price', 'timeout_seconds', 'model_type',
+                 'stream_mode', 'first_token_timeout_seconds', 'total_timeout_seconds', 'timeout_fallback', 'max_tokens',
+                 'reasoning_effort', 'custom_params')
 
 
 class ModelCatalog:

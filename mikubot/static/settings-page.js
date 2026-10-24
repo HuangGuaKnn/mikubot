@@ -5,8 +5,22 @@ function modelTransportFields(model = {}) {
   return `<details class="details"><summary>流式接收与故障恢复</summary>${select("stream_mode","模型响应方式",[["auto","自动（优先流式，兼容普通响应）"],["on","流式"],["off","普通JSON"]],model.stream_mode || "auto")}${field("first_token_timeout_seconds","首次有效内容等待（秒）",model.first_token_timeout_seconds ?? 90,"number","心跳和空事件不算有效内容。","min=\"5\" max=\"600\"")}${field("total_timeout_seconds","整轮模型等待上限（秒）",model.total_timeout_seconds ?? 300,"number","包含排队与备用模型尝试；不会无限等待。","min=\"5\" max=\"1800\"")}${toggle("timeout_fallback","响应超时或断流后尝试备用模型","默认关闭。原请求可能仍被收费；开启允许额外消费。已执行工具的续答及电脑任务不会自动重放。",!!model.timeout_fallback)}</details>`;
 }
 
+// One shared advanced-parameter block, used by the default/settings model form
+// and by the model-catalog editor. Numbers carry the form name; ranges stay
+// anonymous and are paired through data-sync attributes handled in ui-core.js.
+function advancedModelFields(model = {}) {
+  const item = model || {};
+  const uid = `advanced-${++fieldId}`;
+  const pair = (name,title,value,min,max,step,hint) => {
+    const rangeId = `${uid}-${name}-range`, numberId = `${uid}-${name}-number`;
+    return `<div class="field"><label for="${rangeId}">${e(title)}</label><div class="range-with-value"><input id="${rangeId}" type="range" min="${e(min)}" max="${e(max)}" step="${e(step)}" value="${e(value)}" aria-label="${e(title)}" data-sync-target="${numberId}"><input id="${numberId}" name="${name}" type="number" min="${e(min)}" max="${e(max)}" step="${e(step)}" value="${e(value)}" aria-label="${e(title)}" data-sync-source="${rangeId}"></div><small>${e(hint)}</small></div>`;
+  };
+  return `<div class="form-grid advanced-parameters">${pair("temperature","对话温度",item.temperature ?? .7,"0","2","0.1","数值越高回答越发散；默认 0.7。")}${pair("top_p","Top-p",item.top_p ?? 1,"0","1","0.01","按累计概率截取候选；默认 1。")}${pair("max_tokens","最大 Tokens",item.max_tokens ?? 0,"0","100000","1","0 表示不额外限制；设置后聊天按该额度发送，其他任务最多使用该上限。")}${select("reasoning_effort","思考强度",[["","未指定"],["low","low"],["medium","medium"],["high","high"],["max","max"]],item.reasoning_effort || "")}</div>${textarea("custom_params","自定义参数",JSON.stringify(item.custom_params || {},null,2),"发送到模型接口的额外 JSON 参数，须为 JSON 对象，例如 {\"seed\":7}；不能覆盖模型、消息、工具或输出额度等核心字段。","rows=\"4\"")}`;
+}
+
 function settingsModelForm(model = {},wizard = false) {
-  return `${!wizard ? modelTransportFields(model) : ""}<div class="form-grid">${field("base_url","API 地址",model.base_url || "https://api.openai.com/v1","url","填写兼容 OpenAI Chat Completions 的服务地址。","required data-full placeholder=\"https://…/v1\"")}${field("api_key","API 密钥","","password",model.api_key_set ? "已保存密钥。留空可继续使用当前密钥。" : "密钥只保存在本机，不会在页面中回显。","autocomplete=\"new-password\" data-full placeholder=\"sk-…\"")}${field("model","模型名称",model.model || "","text","与服务商提供的名称一致。","required data-full placeholder=\"输入模型名称\" list=\"model-list\"")}<datalist id="model-list"></datalist>${!wizard ? field("temperature","对话温度",model.temperature ?? .7,"number","越低越稳定，越高表达越灵活。","step=\"0.1\" min=\"0\" max=\"2\"") : ""}${!wizard ? field("timeout_seconds","模型等待超时（秒）",model.timeout_seconds ?? 90,"number","默认90秒，可设5—600秒；较慢的模型或图片任务可适当增大。","min=\"5\" max=\"600\" step=\"1\"") + field("input_price","输入价格 / 百万 Token",model.input_price || 0,"number","填写人民币价格，用于本地费用估算。","min=\"0\" step=\"0.01\"") + field("output_price","输出价格 / 百万 Token",model.output_price || 0,"number","未配置单价时显示费用未知；实际账单以服务商为准。","min=\"0\" step=\"0.01\"") : ""}</div>${toggle("vision","启用图片理解","仅当所选模型支持图片时开启。",model.vision)}`;
+  const advanced = !wizard ? advancedModelFields(model) : "";
+  return `${!wizard ? modelTransportFields(model) : ""}<div class="form-grid">${field("base_url","API 地址",model.base_url || "https://api.openai.com/v1","url","填写兼容 OpenAI Chat Completions 的服务地址。","required data-full placeholder=\"https://…/v1\"")}${field("api_key","API 密钥","","password",model.api_key_set ? "已保存密钥。留空可继续使用当前密钥。" : "密钥只保存在本机，不会在页面中回显。","autocomplete=\"new-password\" data-full placeholder=\"sk-…\"")}${field("model","模型名称",model.model || "","text","与服务商提供的名称一致。","required data-full placeholder=\"输入模型名称\" list=\"model-list\"")}<datalist id="model-list"></datalist>${!wizard ? field("timeout_seconds","模型等待超时（秒）",model.timeout_seconds ?? 90,"number","默认90秒，可设5—600秒；较慢的模型或图片任务可适当增大。","min=\"5\" max=\"600\" step=\"1\"") + field("input_price","输入价格 / 百万 Token",model.input_price || 0,"number","填写人民币价格，用于本地费用估算。","min=\"0\" step=\"0.01\"") + field("output_price","输出价格 / 百万 Token",model.output_price || 0,"number","未配置单价时显示费用未知；实际账单以服务商为准。","min=\"0\" step=\"0.01\"") : ""}</div>${advanced}${toggle("vision","启用图片理解","仅当所选模型支持图片时开启。",model.vision)}`;
 }
 
 async function renderSettingsBase() {

@@ -13,7 +13,9 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
 import httpx
-from .settings import resolve_model
+from .settings import (resolve_model, MAX_OUTPUT_TOKENS, CUSTOM_PARAM_RESERVED,
+                       CUSTOM_PARAM_MAX_ABS, CUSTOM_PARAM_MAX_STRING, CUSTOM_PARAM_MAX_JSON,
+                       CUSTOM_PARAM_MAX_COUNT)
 from .timezones import config_zone, day_bounds
 from .model_stream import receive_chat, ModelStreamError, IncompleteModelStreamError
 from .chat_preview import emit_preview, preview_active
@@ -246,8 +248,8 @@ class Provider:
 
     @staticmethod
     def _same_model(left, right):
-        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'input_price', 'output_price', 'timeout_seconds', 'model_type',
-                  'stream_mode', 'first_token_timeout_seconds', 'total_timeout_seconds', 'timeout_fallback')
+        fields = ('id', 'base_url', 'model', 'api_key', 'enabled', 'vision', 'tools', 'temperature', 'top_p', 'input_price', 'output_price', 'timeout_seconds', 'model_type',
+                  'stream_mode', 'first_token_timeout_seconds', 'total_timeout_seconds', 'timeout_fallback', 'max_tokens', 'reasoning_effort', 'custom_params')
         return all(left.get(key) == right.get(key) for key in fields)
 
     def _check_send(self, before_send):
@@ -355,7 +357,7 @@ class Provider:
                 # as explicit unknown usage instead of silently freeing budget.
                 self.store.record_usage({**pending, 'estimated': True, 'unconfirmed': True, 'latency_ms': 0})
 
-    async def complete(self, messages, *, tools=None, config=None, purpose='chat', scope_id='web:default', max_tokens=1000, before_send=None):
+    async def complete(self, messages, *, tools=None, config=None, purpose='chat', scope_id='web:default', max_tokens=None, before_send=None):
         primary = dict(config) if config is not None else self.resolve(purpose, scope_id)
         seconds = primary.get('total_timeout_seconds', 300)
         if type(seconds) is not int or not 5 <= seconds <= 1800:
@@ -371,9 +373,9 @@ class Provider:
             if purpose == 'chat': emit_preview('reset')
             raise
 
-    async def _complete_candidates(self, messages, *, tools=None, config=None, purpose='chat', scope_id='web:default', max_tokens=1000, before_send=None):
-        if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= 100000:
-            raise ProviderError('max_tokens 须为 1—100000 的整数')
+    async def _complete_candidates(self, messages, *, tools=None, config=None, purpose='chat', scope_id='web:default', max_tokens=None, before_send=None):
+        if max_tokens is not None and (isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or not 1 <= max_tokens <= MAX_OUTPUT_TOKENS):
+            raise ProviderError(f'max_tokens 须为 1—{MAX_OUTPUT_TOKENS} 的整数')
         primary = dict(config) if config is not None else self.resolve(purpose, scope_id)
         if primary.get('model_type') == 'embedding':
             raise ProviderError('嵌入模型不能生成聊天回复，请选择对话模型')
@@ -448,7 +450,63 @@ class Provider:
             return result
         raise last_error or ProviderError('没有可用的模型，请检查任务路由与模型能力。')
 
-    async def _complete(self, messages, *, tools=None, config=None, purpose='chat', scope_id='web:default', max_tokens=1000, before_send=None):
+    @staticmethod
+    def _max_output_tokens(cfg, purpose, requested):
+        """Resolve the single output-budget rule shared by reserve and request.
+
+        The configured ceiling is zero for legacy/default configurations. Chat
+        without an explicit caller budget uses the configured ceiling when set,
+        otherwise the historical 1000-token chat default. Every explicit task
+        budget is respected but never exceeds a user-configured ceiling.
+        """
+        configured = cfg.get('max_tokens', 0)
+        if type(configured) is not int or not 0 <= configured <= MAX_OUTPUT_TOKENS:
+            configured = 0
+        if requested is None:
+            requested = configured if purpose == 'chat' and configured else 1000
+        elif configured:
+            requested = min(requested, configured)
+        return requested
+
+    @staticmethod
+    def _custom_params(cfg):
+        """Return JSON-safe provider parameters without request-shaping fields."""
+        raw = cfg.get('custom_params') or {}
+        if not isinstance(raw, dict) or len(raw) > CUSTOM_PARAM_MAX_COUNT:
+            raise ProviderError('自定义参数须为不超过50项的对象。')
+        cleaned = {}
+        for key, value in raw.items():
+            if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]{0,63}', key):
+                raise ProviderError('自定义参数键名无效。')
+            if key in CUSTOM_PARAM_RESERVED:
+                continue
+            if value is None or isinstance(value, bool):
+                cleaned[key] = value
+            elif isinstance(value, int) and abs(value) <= CUSTOM_PARAM_MAX_ABS:
+                cleaned[key] = value
+            elif isinstance(value, float) and math.isfinite(value) and abs(value) <= CUSTOM_PARAM_MAX_ABS:
+                cleaned[key] = value
+            elif isinstance(value, str) and len(value) <= CUSTOM_PARAM_MAX_STRING:
+                cleaned[key] = value
+            else:
+                raise ProviderError('自定义参数值无效或超出支持范围。')
+        try:
+            encoded = json.dumps(cleaned, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+        except (TypeError, ValueError) as exc:
+            raise ProviderError('自定义参数无法序列化为 JSON，请检查参数值。') from exc
+        if len(encoded) > CUSTOM_PARAM_MAX_JSON:
+            raise ProviderError('自定义参数整体过大，请精简后重试。')
+        return cleaned
+
+    @staticmethod
+    def _check_payload(payload):
+        """Fail before reservation when the request cannot be serialized to JSON."""
+        try:
+            json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ProviderError('模型请求无法序列化为 JSON，请检查模型参数、消息或工具定义。') from exc
+
+    async def _complete(self, messages, *, tools=None, config=None, purpose='chat', scope_id='web:default', max_tokens=None, before_send=None):
         cfg = dict(config or self.settings.get()['model'])
         if not cfg.get('base_url') or not cfg.get('model'):
             raise ProviderError('请先在设置中填写模型服务地址与模型名称，并测试连接。')
@@ -471,8 +529,11 @@ class Provider:
             raise ProviderError('本次模型输入超过文字或图片总上限，请减少资料、历史或工具输出后重试。')
         url = endpoint(cfg['base_url'])
         timeout = request_timeout(cfg)
-        reservation, max_tokens = await self._reserve(cfg, scope_id, purpose, estimate_tokens(messages, tools), max_tokens)
-        payload = {'model': cfg['model'], 'messages': messages, 'temperature': cfg.get('temperature', 0.7), 'max_tokens': max_tokens}
+        requested_max_tokens = self._max_output_tokens(cfg, purpose, max_tokens)
+        payload = self._custom_params(cfg)
+        payload.update({'model': cfg['model'], 'messages': messages, 'temperature': cfg.get('temperature', 0.7), 'top_p': cfg.get('top_p', 1.0), 'max_tokens': requested_max_tokens})
+        if cfg.get('reasoning_effort'):
+            payload['reasoning_effort'] = cfg['reasoning_effort']
         stream_mode = cfg.get('stream_mode', 'off')
         if stream_mode != 'off':
             payload['stream'] = True
@@ -480,6 +541,9 @@ class Provider:
         if tools:
             payload['tools'] = tools
             payload['tool_choice'] = 'auto'
+        self._check_payload(payload)
+        reservation, max_tokens = await self._reserve(cfg, scope_id, purpose, estimate_tokens(messages, tools), requested_max_tokens)
+        payload['max_tokens'] = max_tokens
         headers = {'Accept': 'application/json'}
         if cfg.get('api_key'):
             headers['Authorization'] = 'Bearer ' + cfg['api_key']

@@ -60,3 +60,38 @@ async function confirmAction(title,description,perform,labelText = "确认") {
   openModal(title,"",`<p class="record-text">${e(description)}</p>`,"confirm",null,labelText);
   state.confirm = perform;
 }
+
+// Advanced model parameters use a range+number pair. Ranges carry no form name,
+// only data-sync-target pointing at the number input; numbers carry
+// data-sync-source pointing back at the range. The delegated "input" listener in
+// app.js calls this, so dragging a slider also updates the submitted value and
+// typing a number moves the slider. No inline handlers and no CSP relaxation.
+function syncRangePair(target) {
+  if (!target || !target.dataset) return;
+  const targetId = target.dataset.syncTarget;
+  if (targetId) {
+    const number = document.getElementById(targetId);
+    if (number && number.value !== target.value) number.value = target.value;
+    return;
+  }
+  const sourceId = target.dataset.syncSource;
+  if (!sourceId) return;
+  const range = document.getElementById(sourceId);
+  if (range && range.value !== target.value) range.value = target.value;
+}
+
+// One validation rule for the shared custom-params textarea: empty means "no
+// extra parameters"; anything that is not a plain JSON object is rejected with
+// the same Chinese message in both the settings form and the catalog modal.
+function parseCustomParams(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return {};
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("自定义参数必须是有效的 JSON 对象。");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("自定义参数必须是有效的 JSON 对象。");
+  return value;
+}

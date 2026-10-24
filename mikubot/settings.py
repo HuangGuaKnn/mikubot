@@ -21,9 +21,9 @@ from .timezones import config_zone
 DEFAULTS = {
     'bot_profiles': DEFAULT_PROFILES,
     'model': {'base_url': '', 'model': '', 'api_key': '', 'vision': False,
-              'temperature': 0.7, 'input_price': 0.0, 'output_price': 0.0, 'timeout_seconds':90,
+              'temperature': 0.7, 'top_p': 1.0, 'input_price': 0.0, 'output_price': 0.0, 'timeout_seconds':90,
               'stream_mode':'auto', 'first_token_timeout_seconds':90, 'total_timeout_seconds':300,
-              'timeout_fallback':False},
+              'timeout_fallback':False, 'max_tokens':0, 'reasoning_effort':'', 'custom_params':{}},
     'onebot': {'enabled': False, 'adapter': 'napcat', 'ws_url': '', 'access_token': '',
                'owner_ids': [], 'allowed_users': [], 'allowed_groups': [], 'chat_policy': 'blacklist',
                'blocked_users': [], 'blocked_groups': [], 'max_message_chars': 0},
@@ -65,6 +65,63 @@ DEFAULTS = {
 
 PROVIDER_DEFAULTS = dict(DEFAULTS['model'], id='', name='', enabled=True, tools=True, source_id='', model_type='')
 SOURCE_DEFAULTS = {'id':'','name':'','base_url':'','api_key':'','enabled':True}
+
+# Per-model output ceiling. Zero means "no extra ceiling": chat keeps its local
+# default and task-specific limits are left untouched, which preserves configs
+# written before this setting existed.
+MAX_OUTPUT_TOKENS = 100000
+# Fields that shape the request itself (output count, budget, stream and tool
+# protocol) cannot be smuggled through generic provider parameters. Values that
+# would change how many tokens are reserved or billed must be core settings.
+CUSTOM_PARAM_RESERVED = frozenset({
+    'model', 'messages', 'stream', 'stream_options', 'tools', 'tool_choice',
+    'functions', 'function_call', 'parallel_tool_calls',
+    'max_tokens', 'max_completion_tokens', 'n', 'best_of',
+    'temperature', 'top_p', 'reasoning_effort',
+})
+CUSTOM_PARAM_MAX_COUNT = 50
+CUSTOM_PARAM_MAX_STRING = 2000
+CUSTOM_PARAM_MAX_JSON = 8000
+CUSTOM_PARAM_MAX_ABS = (1 << 53) - 1
+
+
+def validate_custom_params(custom_params) -> dict:
+    """Validate provider-specific parameters and return a JSON-safe copy.
+
+    The object is deliberately flat: arbitrary nested structures would make the
+    request body unbounded and are not needed by current providers.
+    """
+    if not isinstance(custom_params, dict) or len(custom_params) > CUSTOM_PARAM_MAX_COUNT:
+        raise ValueError('自定义参数须为不超过50项的对象')
+    cleaned = {}
+    for custom_key, custom_value in custom_params.items():
+        if not isinstance(custom_key, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]{0,63}', custom_key):
+            raise ValueError('自定义参数键名无效')
+        if custom_key in CUSTOM_PARAM_RESERVED:
+            raise ValueError(f'自定义参数不能覆盖模型请求核心字段（{custom_key}）')
+        if custom_value is None or isinstance(custom_value, bool):
+            cleaned[custom_key] = custom_value
+        elif isinstance(custom_value, int):
+            if abs(custom_value) > CUSTOM_PARAM_MAX_ABS:
+                raise ValueError('自定义参数整数超出安全范围')
+            cleaned[custom_key] = custom_value
+        elif isinstance(custom_value, float):
+            if not math.isfinite(custom_value) or abs(custom_value) > CUSTOM_PARAM_MAX_ABS:
+                raise ValueError('自定义参数数值须为有限数字')
+            cleaned[custom_key] = custom_value
+        elif isinstance(custom_value, str):
+            if len(custom_value) > CUSTOM_PARAM_MAX_STRING:
+                raise ValueError('自定义参数字符串过长')
+            cleaned[custom_key] = custom_value
+        else:
+            raise ValueError('自定义参数值目前只支持字符串、数字、布尔值或空值')
+    try:
+        encoded = json.dumps(cleaned, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+    except (TypeError, ValueError) as exc:
+        raise ValueError('自定义参数无法序列化为 JSON') from exc
+    if len(encoded) > CUSTOM_PARAM_MAX_JSON:
+        raise ValueError('自定义参数整体过大，请精简后保存')
+    return cleaned
 
 
 def resolved_identity(config, scope=None):
@@ -467,13 +524,18 @@ class Settings:
                     raise ValueError('流式模式须为auto/on/off')
                 if type(candidate['timeout_fallback']) is not bool:
                     raise ValueError('超时备用模型开关须为布尔值')
-                for key, low, high in (('temperature', 0, 2), ('input_price', 0, 1000000), ('output_price', 0, 1000000)):
+                for key, low, high in (('temperature', 0, 2), ('top_p', 0, 1), ('input_price', 0, 1000000), ('output_price', 0, 1000000)):
                     try:
                         candidate[key] = float(candidate[key])
                     except (ValueError, TypeError) as exc:
                         raise ValueError('模型温度和价格须为数字') from exc
                     if not math.isfinite(candidate[key]) or not low <= candidate[key] <= high:
                         raise ValueError('模型温度或价格超出支持范围')
+                if type(candidate.get('max_tokens')) is not int or not 0 <= candidate['max_tokens'] <= MAX_OUTPUT_TOKENS:
+                    raise ValueError('最大 Tokens 须为0—100000的整数；0 表示不额外限制')
+                if not isinstance(candidate.get('reasoning_effort'), str) or len(candidate['reasoning_effort']) > 40:
+                    raise ValueError('思考强度须为不超过40个字符的文本')
+                candidate['custom_params'] = validate_custom_params(candidate.get('custom_params', {}))
                 for key in ('vision', 'tools', 'enabled'):
                     if key in candidate and type(candidate[key]) is not bool:
                         raise ValueError('模型能力开关须为布尔值')
